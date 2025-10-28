@@ -12,7 +12,7 @@ const program = new Command();
 
 // Default template URL
 const DEFAULT_TEMPLATE = 'https://github.com/VoloBuilds/volo-app.git';
-const VOLO_APP_BRANCH = 'release/v0.3.0';
+const VOLO_APP_BRANCH = 'release/v0.3.1';
 
 export async function main() {
   program

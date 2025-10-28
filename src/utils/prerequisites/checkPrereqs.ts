@@ -43,7 +43,10 @@ async function checkPrerequisite(prereq: Prerequisite): Promise<PrerequisiteResu
     // If found, try to check version
     if (globalFound && prereq.version) {
       try {
-        const { stdout } = await execa(prereq.command, [prereq.version]);
+        const { stdout } = await execa(prereq.command, [prereq.version], {
+          timeout: 10000, // 10 second timeout to prevent hanging
+          reject: true
+        });
         globalVersion = prereq.checkVersion ? prereq.checkVersion(stdout) : stdout.trim();
 
         if (globalVersion) {
@@ -64,7 +67,19 @@ async function checkPrerequisite(prereq: Prerequisite): Promise<PrerequisiteResu
             return { status: 'ok', currentVersion: globalVersion };
           }
         }
-      } catch (error) {
+      } catch (error: any) {
+        // Handle timeout errors specially - likely means CLI needs auth or has issues
+        if (error.timedOut) {
+          logger.debug(`${prereq.name} version check timed out`);
+          
+          // For CLIs that require authentication (like neonctl), timeout might mean not authenticated
+          // Still report as OK but we'll check auth separately
+          if (prereq.command === 'neonctl' || prereq.command === 'supabase') {
+            logger.debug(`${prereq.name} found but version check timed out - may need authentication`);
+            return { status: 'ok', currentVersion: 'installed (authentication required)' };
+          }
+        }
+        
         logger.debug(`${prereq.name} found but failed to run: ${error}`);
         // CLI exists but can't run (dependency issues, etc.)
         // Try local installation if available

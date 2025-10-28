@@ -21,6 +21,7 @@ export interface ProjectConfig {
     messagingSenderId: string;
     appId: string;
     measurementId: string;
+    allowAnonymous: boolean;
   };
   database: {
     url: string;

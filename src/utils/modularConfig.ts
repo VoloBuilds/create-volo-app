@@ -59,6 +59,10 @@ async function generateModularServerEnv(
     envContent += `FIREBASE_PROJECT_ID=demo-project\n\n`;
   }
   
+  // Anonymous user configuration
+  envContent += `# Allow anonymous users (server will accept anonymous Firebase tokens)\n`;
+  envContent += `ALLOW_ANONYMOUS_USERS=${config.firebase.allowAnonymous ? 'true' : 'false'}\n\n`;
+  
   // Environment setting
   envContent += `# Environment\n`;
   envContent += `NODE_ENV=development\n`;
@@ -123,6 +127,10 @@ async function generateModularUIEnv(
     envContent += `# Local Firebase Auth (emulator)\n`;
     envContent += `VITE_FIREBASE_EMULATOR=true\n\n`;
   }
+  
+  // Anonymous user configuration
+  envContent += `# Allow anonymous users to access app without authentication\n`;
+  envContent += `VITE_ALLOW_ANONYMOUS_USERS=${config.firebase.allowAnonymous ? 'true' : 'false'}\n\n`;
   
   // API URL setting
   if (connectionFlags.deploy) {

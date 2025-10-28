@@ -25,9 +25,20 @@ export async function checkAuthenticationStatus(databaseProvider?: string): Prom
   // Check Neon auth (only if using Neon)
   if (databaseProvider === 'neon') {
     try {
-      const { stdout } = await execNeonctl(['me'], { stdio: 'pipe' });
-      status.neon = stdout.includes('@');
-    } catch {
+      // Try to check auth status with 'projects list' command which doesn't trigger browser login
+      // This command will fail with an error message if not authenticated, instead of hanging
+      const { stdout, stderr } = await execNeonctl(['projects', 'list'], { 
+        stdio: 'pipe', 
+        timeout: 5000 // 5 second timeout
+      });
+      
+      // If the command succeeds, user is authenticated
+      status.neon = true;
+      logger.debug(`Neon auth check result: authenticated`);
+    } catch (error: any) {
+      // If command fails, user is not authenticated
+      // This is better than 'me' command which opens a browser
+      logger.debug(`Neon auth check failed (not authenticated): ${error.message || error}`);
       status.neon = false;
     }
   } else {
