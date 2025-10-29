@@ -35,6 +35,7 @@ interface FirebaseConfig {
   messagingSenderId: string;
   appId: string;
   measurementId: string;
+  allowAnonymous: boolean;
 }
 
 async function checkFirebaseAuth(): Promise<boolean> {
@@ -121,13 +122,43 @@ export async function setupFirebase(fastMode = false, projectName?: string): Pro
     await setupFirebaseAuth(projectId);
   }
 
+  // Ask about anonymous user access
+  let allowAnonymous: boolean;
+  if (fastMode) {
+    // In fast mode, default to allowing anonymous users
+    allowAnonymous = true;
+  } else {
+    logger.newLine();
+    console.log(chalk.gray('When enabled, users can explore your app immediately without authentication.'));
+    console.log(chalk.gray('They can sign in later to associate their account with a permanent login.'));
+    logger.newLine();
+    
+    const { allowAnonymousAnswer } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'allowAnonymousAnswer',
+        message: 'Allow anonymous users to access the app before signing in?',
+        default: false
+      }
+    ]);
+    allowAnonymous = allowAnonymousAnswer;
+  }
+
+  // If anonymous auth is enabled, guide user to enable it in Firebase Console
+  if (allowAnonymous) {
+    await setupAnonymousAuth(projectId, fastMode);
+  }
+
   // Create and configure web app
   const webAppConfig = await createWebApp(projectId);
 
   logger.success('Firebase setup completed!');
   logger.newLine();
 
-  return webAppConfig;
+  return {
+    ...webAppConfig,
+    allowAnonymous
+  };
 }
 
 async function createFirebaseProjectFast(baseProjectName: string): Promise<string> {
@@ -409,7 +440,68 @@ async function setupFirebaseAuth(projectId: string): Promise<void> {
   logger.newLine();
 }
 
-async function createWebApp(projectId: string): Promise<FirebaseConfig> {
+async function setupAnonymousAuth(projectId: string, fastMode: boolean): Promise<void> {
+  logger.newLine();
+  logger.info('Setting up Anonymous Authentication...');
+  logger.newLine();
+
+  console.log(chalk.gray('Anonymous authentication allows users to access your app immediately'));
+  console.log(chalk.gray('without signing up. They can convert to a permanent account later.'));
+  logger.newLine();
+
+  console.log(chalk.yellow('📋 Please enable Anonymous Authentication in Firebase Console:'));
+  logger.newLine();
+
+  console.log(chalk.blue('1. Open Firebase Console:'));
+  console.log(chalk.cyan(`   https://console.firebase.google.com/project/${projectId}/authentication/providers`));
+  logger.newLine();
+
+  console.log(chalk.blue('2. Enable Anonymous Sign-In:'));
+  console.log(chalk.gray('   • Scroll down and click on "Anonymous" in the providers list'));
+  console.log(chalk.gray('   • Toggle the "Enable" switch to ON'));
+  console.log(chalk.gray('   • Click "Save"'));
+  logger.newLine();
+
+  if (fastMode) {
+    // In fast mode, just show instructions without prompting
+    console.log(chalk.green('✅ Your app is configured to allow anonymous users'));
+    console.log(chalk.yellow('⚠️  Remember to enable Anonymous authentication in Firebase Console'));
+    console.log(chalk.gray('   Users won\'t be able to access the app until this is enabled'));
+  } else {
+    // In interactive mode, wait for confirmation
+    console.log(chalk.yellow('⏳ This takes just a few seconds...'));
+    logger.newLine();
+
+    const { completed } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'completed',
+        message: 'Have you enabled Anonymous authentication in Firebase Console?',
+        default: true
+      }
+    ]);
+
+    if (completed) {
+      logger.success('Anonymous authentication enabled! 🎉');
+      logger.newLine();
+      console.log(chalk.green('✅ Users can now access your app without signing in'));
+      console.log(chalk.gray('They can upgrade to a permanent account anytime'));
+    } else {
+      logger.warning('Anonymous authentication not enabled.');
+      logger.newLine();
+      console.log(chalk.yellow('⚠️  Your app is configured to allow anonymous users, but Firebase will reject them'));
+      console.log(chalk.yellow('   until you enable this setting in the Firebase Console.'));
+      logger.newLine();
+      console.log(chalk.blue('To enable it later:'));
+      console.log(chalk.cyan(`1. Go to: https://console.firebase.google.com/project/${projectId}/authentication/providers`));
+      console.log(chalk.cyan('2. Enable the "Anonymous" sign-in method'));
+    }
+  }
+
+  logger.newLine();
+}
+
+async function createWebApp(projectId: string): Promise<Omit<FirebaseConfig, 'allowAnonymous'>> {
   // First, check if there are existing web apps
   const existingApps = await getExistingWebApps(projectId);
   
@@ -452,7 +544,7 @@ async function createWebApp(projectId: string): Promise<FirebaseConfig> {
   }
   
   // Get app configuration
-  return await getWebAppConfig(projectId, appId);
+  return getWebAppConfig(projectId, appId);
 }
 
 async function getExistingWebApps(projectId: string): Promise<any[]> {
@@ -510,7 +602,7 @@ async function createNewWebApp(projectId: string): Promise<string> {
   }
 }
 
-async function getWebAppConfig(projectId: string, appId: string): Promise<FirebaseConfig> {
+async function getWebAppConfig(projectId: string, appId: string): Promise<Omit<FirebaseConfig, 'allowAnonymous'>> {
   const spinner = ora('Getting web app configuration...').start();
   
   try {

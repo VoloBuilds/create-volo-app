@@ -127,7 +127,8 @@ export async function createApp(
           apiKey: 'demo-api-key', 
           messagingSenderId: 'demo-sender-id', 
           appId: 'demo-app-id', 
-          measurementId: 'demo-measurement-id' 
+          measurementId: 'demo-measurement-id',
+          allowAnonymous: true  // Local emulator mode allows anonymous users
         },
     cloudflare: connectionFlags.deploy 
       ? await setupCloudflare(name, options.fast || false)
@@ -268,9 +269,6 @@ export async function createApp(
       await new Promise(resolve => setTimeout(resolve, 2000));
       
       logger.newLine();
-      console.log(chalk.blue.bold('🌐 Your app should be starting at:'));
-      console.log(chalk.white('  • Frontend: http://localhost:5173'));
-      console.log(chalk.white('  • Backend API: http://localhost:8787'));
       
       if (connectionFlags.auth && config.firebase.projectId !== 'demo-project') {
         console.log(chalk.white(`  • Firebase Console: https://console.firebase.google.com/project/${config.firebase.projectId}`));

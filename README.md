@@ -19,7 +19,7 @@ npx create-volo-app my-app --full
 **Full Stack:**
 - ⚛️ React + TypeScript + Vite
 - 🎨 Tailwind CSS + ShadCN components
-- 🔐 Firebase Authentication (Google Sign-In)
+- 🔐 Firebase Authentication (Google Sign-In + optional anonymous access)
 - 🔥 Hono API backend (NodeJS)
 - 🗄️ Postgres database with Drizzle ORM
 
@@ -73,6 +73,14 @@ pnpm connect:database       # Choose database provider
 pnpm connect:deploy         # Cloudflare deployment
 pnpm connection:status      # Check current setup
 ```
+
+### 🔐 Authentication Configuration
+
+When setting up Firebase Auth, you'll be asked if you want to allow **anonymous users** to access your app:
+- **Enabled**: Users can explore your app immediately, then sign in later to keep their data
+- **Disabled**: Users must sign in before accessing any features
+
+Defaults: Enabled in local/fast mode, disabled in interactive production setup.
 
 ## Requirements
 

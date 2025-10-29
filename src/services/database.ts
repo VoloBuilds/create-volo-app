@@ -96,10 +96,12 @@ async function checkNeonCLI(): Promise<boolean> {
 
 async function isNeonAuthenticated(): Promise<boolean> {
   try {
-    // Check if already authenticated
-    const { stdout } = await execNeonctl(['me'], { stdio: 'pipe' });
-    return stdout.includes('@');
+    // Check authentication by trying to list projects
+    // This doesn't trigger browser login like 'me' command does
+    await execNeonctl(['projects', 'list'], { stdio: 'pipe', timeout: 5000 });
+    return true;
   } catch (error) {
+    logger.debug(`Neon authentication check failed: ${error}`);
     return false;
   }
 }

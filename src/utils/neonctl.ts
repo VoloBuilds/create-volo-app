@@ -65,6 +65,7 @@ export async function execNeonctl(args: string[], options: CliOptions = {}): Pro
     stdio: 'pipe' as const,
     timeout: 300000, // 5 minutes
     cwd: workingDir,
+    killSignal: 'SIGTERM', // Ensure process can be killed on timeout
     ...options
   };
 
