@@ -2,11 +2,15 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { createRequire } from 'module';
 import { createApp } from './commands/createApp.js';
 import { checkPrerequisites } from './utils/prerequisites/checkPrereqs.js';
 import { logger } from './utils/logger.js';
 import { connectToService } from './commands/connect/index.js';
 import { showConnectionStatus } from './commands/connect/status.js';
+
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json') as { version: string };
 
 const program = new Command();
 
@@ -18,7 +22,7 @@ export async function main() {
   program
     .name('create-volo-app')
     .description('CLI tool to create a new Volo app with flexible local-first or production setup')
-    .version('1.0.0')
+    .version(version)
     .argument('[project-name]', 'Name of the project to create')
     .option('-t, --template <url>', 'Custom template repository URL', DEFAULT_TEMPLATE)
     .option('-b, --branch <branch>', 'Git branch to clone from template repository', VOLO_APP_BRANCH)
@@ -95,7 +99,8 @@ Examples:
             fastMode: options.fast,
             // For local mode, only check core prerequisites (pnpm, git, node)
             // For production mode, check all relevant service CLIs too
-            productionMode: !!(options.auth || options.database || options.deploy || options.full)
+            productionMode: !!(options.auth || options.database || options.deploy || options.full),
+            databasePreference: options.db || (typeof options.database === 'string' ? options.database : undefined)
           });
         }
 

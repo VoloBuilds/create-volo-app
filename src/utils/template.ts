@@ -8,9 +8,7 @@ import { logger } from './logger.js';
 export function validateTemplateUrl(url: string): boolean {
   try {
     const parsedUrl = new URL(url);
-    // Whitelist trusted domains
-    const trustedDomains = ['github.com', 'gitlab.com', 'bitbucket.org'];
-    return trustedDomains.some(domain => parsedUrl.hostname.endsWith(domain));
+    return parsedUrl.hostname === 'github.com' || parsedUrl.hostname.endsWith('.github.com');
   } catch {
     return false;
   }
@@ -65,7 +63,7 @@ export async function downloadTemplate(
   
   // Validate template URL for security
   if (!validateTemplateUrl(templateUrl)) {
-    throw new Error(`Invalid or untrusted template URL: ${templateUrl}. Only GitHub, GitLab, and Bitbucket repositories are allowed.`);
+    throw new Error(`Invalid or untrusted template URL: ${templateUrl}. Only GitHub repositories are supported.`);
   }
   
   onProgress?.(10, 'Preparing to download template');

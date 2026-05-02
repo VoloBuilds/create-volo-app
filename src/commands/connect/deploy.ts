@@ -11,6 +11,7 @@ import {
   confirmReconfiguration
 } from './shared.js';
 import readline from 'readline';
+import { parseEnvFile } from '../../utils/env.js';
 
 export async function connectDeploy(projectPath: string): Promise<void> {
   const rl = createReadlineInterface();
@@ -196,22 +197,16 @@ async function updatePackageJsonForCloudflare(projectPath: string) {
     console.log(chalk.green('✅ Server package.json updated for Cloudflare development'));
   }
   
-  // Also update root package.json dev script
+  // Also update root package.json to add dev:node fallback script
   const rootPackageJsonPath = path.join(projectPath, 'package.json');
   
   if (existsSync(rootPackageJsonPath)) {
     const packageJson = JSON.parse(await readFile(rootPackageJsonPath, 'utf-8'));
     
-    // Update the dev script to use wrangler
-    if (packageJson.scripts && packageJson.scripts.dev) {
-      packageJson.scripts.dev = packageJson.scripts.dev.replace(
-        'cd server && pnpm dev',
-        'cd server && pnpm dev'
-      ); // This will now use the updated server dev script
-      packageJson.scripts['dev:node'] = packageJson.scripts.dev.replace(
-        'cd server && pnpm dev',
-        'cd server && pnpm dev:node'
-      ); // Keep Node.js option
+    if (packageJson.scripts) {
+      packageJson.scripts['dev:node'] = packageJson.scripts.dev
+        ? packageJson.scripts.dev.replace('cd server && pnpm dev', 'cd server && pnpm dev:node')
+        : 'cd server && pnpm dev:node';
     }
     
     await writeFile(rootPackageJsonPath, JSON.stringify(packageJson, null, 2));
@@ -260,22 +255,6 @@ async function checkForEmbeddedPostgres(projectPath: string): Promise<boolean> {
   }
 }
 
-function parseEnvFile(content: string): Record<string, string> {
-  const envVars: Record<string, string> = {};
-  
-  content.split('\n').forEach(line => {
-    const cleanLine = line.trim();
-    if (cleanLine && !cleanLine.startsWith('#')) {
-      const [key, ...valueParts] = cleanLine.split('=');
-      if (key && valueParts.length > 0) {
-        envVars[key.trim()] = valueParts.join('=').trim();
-      }
-    }
-  });
-  
-  return envVars;
-}
-
 async function setupWorkerEnvironment(projectPath: string) {
   console.log(chalk.yellow('\n🔧 Setting up Worker environment variables...'));
   
@@ -285,17 +264,7 @@ async function setupWorkerEnvironment(projectPath: string) {
   
   if (existsSync(envPath)) {
     const envContent = await readFile(envPath, 'utf-8');
-    
-    // Parse environment variables
-    envContent.split('\n').forEach(line => {
-      const cleanLine = line.trim();
-      if (cleanLine && !cleanLine.startsWith('#')) {
-        const [key, ...valueParts] = cleanLine.split('=');
-        if (key && valueParts.length > 0) {
-          envVars[key.trim()] = valueParts.join('=').trim();
-        }
-      }
-    });
+    envVars = parseEnvFile(envContent);
   }
   
   // Show required environment variables

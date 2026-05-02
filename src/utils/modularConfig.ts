@@ -122,10 +122,10 @@ async function generateModularUIEnv(
   // Firebase emulator setting
   if (connectionFlags.auth) {
     envContent += `# Production Firebase Auth\n`;
-    envContent += `VITE_FIREBASE_EMULATOR=false\n\n`;
+    envContent += `VITE_USE_FIREBASE_EMULATOR=false\n\n`;
   } else {
     envContent += `# Local Firebase Auth (emulator)\n`;
-    envContent += `VITE_FIREBASE_EMULATOR=true\n\n`;
+    envContent += `VITE_USE_FIREBASE_EMULATOR=true\n\n`;
   }
   
   // Anonymous user configuration

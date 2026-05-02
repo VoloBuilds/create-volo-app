@@ -171,11 +171,12 @@ export async function createApp(
     if (error && typeof error === 'object' && 'code' in error && error.code === 1) {
       // Don't show additional error messages - the post-setup script already handled this
       // Exit completely when database setup fails
-      return;
+      process.exit(1);
     }
     
     logger.error('Failed to complete project setup');
     logger.debug(`Post-setup error: ${error}`);
+    process.exit(1);
   }
 
   // Step 7: Success/Status message

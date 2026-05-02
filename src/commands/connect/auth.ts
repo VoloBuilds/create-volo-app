@@ -91,7 +91,7 @@ export async function connectAuth(projectPath: string): Promise<void> {
     
     console.log(chalk.blue('\n💡 To revert to local development:'));
     console.log('   - Restore backup: cp ui/src/lib/firebase-config.backup.json ui/src/lib/firebase-config.json');
-    console.log('   - Update ui/.env.local: VITE_FIREBASE_EMULATOR=true');
+    console.log('   - Update ui/.env.local: VITE_USE_FIREBASE_EMULATOR=true');
     
   } catch (error) {
     console.error(chalk.red(`\n❌ Error: ${error instanceof Error ? error.message : String(error)}`));
@@ -176,11 +176,11 @@ async function updateEnvironmentFiles(projectPath: string, config: FirebaseConfi
   }
   
   // Remove emulator flag if it exists
-  uiEnvContent = uiEnvContent.replace(/VITE_FIREBASE_EMULATOR=.*/g, '');
+  uiEnvContent = uiEnvContent.replace(/VITE_USE_FIREBASE_EMULATOR=.*/g, '');
   
   // Add production flag
-  if (!uiEnvContent.includes('VITE_FIREBASE_EMULATOR=')) {
-    uiEnvContent += '\n# Production Firebase Auth\nVITE_FIREBASE_EMULATOR=false\n';
+  if (!uiEnvContent.includes('VITE_USE_FIREBASE_EMULATOR=')) {
+    uiEnvContent += '\n# Production Firebase Auth\nVITE_USE_FIREBASE_EMULATOR=false\n';
   }
   
   await writeFile(uiEnvPath, uiEnvContent.trim() + '\n');
