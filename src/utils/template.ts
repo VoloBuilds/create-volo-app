@@ -14,6 +14,36 @@ export function validateTemplateUrl(url: string): boolean {
   }
 }
 
+export interface TemplateSource {
+  type: 'url' | 'local';
+  url?: string;
+  localPath?: string;
+  branch?: string;
+}
+
+/**
+ * Parses a `--template` argument into a structured TemplateSource.
+ *
+ * - URLs (containing `://` or starting with `git@`) optionally include a
+ *   `#branch` fragment that is split out.
+ * - Anything else is treated as a local filesystem path.
+ */
+export function parseTemplateArg(value: string): TemplateSource {
+  if (value.includes('://') || value.startsWith('git@')) {
+    const hashIndex = value.indexOf('#');
+    if (hashIndex !== -1) {
+      return {
+        type: 'url',
+        url: value.substring(0, hashIndex),
+        branch: value.substring(hashIndex + 1)
+      };
+    }
+    return { type: 'url', url: value };
+  }
+
+  return { type: 'local', localPath: value };
+}
+
 /**
  * Extracts owner and repo from a git URL
  */
@@ -262,10 +292,12 @@ export async function validateTemplate(templatePath: string): Promise<boolean> {
   const requiredFiles = [
     'package.json',
     'server/src/api.ts',
+    'server/src/trpc/router.ts',
     'server/src/server.ts',
     'server/src/lib/env.ts',
     'server/.env.example',
     'server/platforms/cloudflare/wrangler.toml.template',
+    'ui/platforms/cloudflare/wrangler.toml.template',
     'ui/src/lib/firebase-config.template.json',
     'scripts/post-setup.js'
   ];
@@ -309,5 +341,45 @@ export async function validateTemplate(templatePath: string): Promise<boolean> {
   }
 }
 
-// For backward compatibility, export the old function name as an alias
-export const cloneTemplate = downloadTemplate; 
+/**
+ * Copies a local template directory into `targetDirectory` and runs the same
+ * post-copy pipeline as `downloadTemplate()` (validation, README swap, fresh
+ * git init). Skips obvious noise directories (`node_modules`, `.git`, etc.)
+ * so a working repo can be used as a template source during development.
+ */
+export async function copyLocalTemplate(
+  sourcePath: string,
+  targetDirectory: string
+): Promise<void> {
+  const resolvedSource = path.resolve(sourcePath);
+
+  if (!await fs.pathExists(resolvedSource)) {
+    throw new Error(`Local template not found: ${resolvedSource}`);
+  }
+
+  const realSource = await fs.realpath(resolvedSource);
+
+  logger.debug(`Copying local template from ${realSource} to ${targetDirectory}`);
+
+  await fs.ensureDir(targetDirectory);
+
+  await fs.copy(realSource, targetDirectory, {
+    filter: (src: string) => {
+      const relativePath = path.relative(realSource, src);
+      const excludeDirs = ['node_modules', '.git', 'dist', '.next', 'data'];
+      return !excludeDirs.some(dir =>
+        relativePath === dir || relativePath.startsWith(dir + path.sep)
+      );
+    }
+  });
+
+  const isValidTemplate = await validateTemplate(targetDirectory);
+  if (!isValidTemplate) {
+    throw new Error('Invalid template structure. The directory does not appear to be a valid Volo app template.');
+  }
+
+  await replaceReadmeForCli(targetDirectory);
+  await initializeGitRepo(targetDirectory);
+
+  logger.debug('Local template copied successfully');
+}

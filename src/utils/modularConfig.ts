@@ -24,9 +24,11 @@ export async function generateModularConfigFiles(
   // Generate UI environment for emulator settings
   await generateModularUIEnv(directory, config, connectionFlags);
   
-  // Generate wrangler config only if deployment is connected
+  // Generate wrangler configs only if deployment is connected
   if (connectionFlags.deploy) {
     await generateWranglerConfig(directory, config);
+    await generateUICloudflareConfig(directory, config.cloudflare.workerName);
+    logger.debug('Generated ui/wrangler.toml from template for static assets deployment');
   }
   
   logger.debug('Modular configuration files generated successfully');
@@ -144,6 +146,37 @@ async function generateModularUIEnv(
   await fs.ensureDir(path.dirname(envPath));
   await fs.writeFile(envPath, envContent);
   logger.debug('Generated ui/.env.local with modular configuration');
+}
+
+/**
+ * Generates `ui/wrangler.toml` from the template and adds deploy scripts +
+ * wrangler devDependency to `ui/package.json`.  Shared by both initial app
+ * creation (`generateModularConfigFiles`) and later `connect:deploy`.
+ */
+export async function generateUICloudflareConfig(directory: string, workerName: string): Promise<void> {
+  const templatePath = path.join(directory, 'ui', 'platforms', 'cloudflare', 'wrangler.toml.template');
+  const wranglerPath = path.join(directory, 'ui', 'wrangler.toml');
+
+  const template = await fs.readFile(templatePath, 'utf-8');
+  const wranglerConfig = template.replace(/{{WORKER_NAME}}/g, workerName);
+
+  await fs.ensureDir(path.dirname(wranglerPath));
+  await fs.writeFile(wranglerPath, wranglerConfig);
+
+  const uiPackageJsonPath = path.join(directory, 'ui', 'package.json');
+  if (await fs.pathExists(uiPackageJsonPath)) {
+    const packageJson = JSON.parse(await fs.readFile(uiPackageJsonPath, 'utf-8'));
+    packageJson.scripts = {
+      ...packageJson.scripts,
+      'deploy': 'pnpm run build && wrangler deploy',
+      'deploy:cf': 'pnpm run deploy',
+    };
+    packageJson.devDependencies = {
+      ...packageJson.devDependencies,
+      'wrangler': '^3.0.0',
+    };
+    await fs.writeFile(uiPackageJsonPath, JSON.stringify(packageJson, null, 2));
+  }
 }
 
 async function generateWranglerConfig(directory: string, config: ProjectConfig): Promise<void> {

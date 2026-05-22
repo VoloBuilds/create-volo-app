@@ -1,7 +1,8 @@
+import path from 'path';
 import chalk from 'chalk';
 import ora from 'ora';
 import { logger } from '../utils/logger.js';
-import { downloadTemplate } from '../utils/template.js';
+import { downloadTemplate, parseTemplateArg, copyLocalTemplate } from '../utils/template.js';
 import { setupCloudflare } from '../services/cloudflare.js';
 import { generateModularConfigFiles } from '../utils/modularConfig.js';
 import { execPnpm, execPnpmDetached } from '../utils/cli.js';
@@ -22,10 +23,11 @@ export async function createApp(
     deploy: !!(options.deploy || options.full)
   };
 
-  // Get project name
-  const name = await getProjectName(projectName);
-  const isCurrentDirectory = projectName === '.';
-  const directory = await validateAndPrepareDirectory(name, isCurrentDirectory);
+  const configData = options.configData;
+
+  // Get project name and directory
+  const { name, directory: resolvedDir, isCurrentDirectory } = await getProjectName(projectName, configData);
+  const directory = await validateAndPrepareDirectory(resolvedDir, isCurrentDirectory, configData);
 
   // Determine setup type for messaging
   const isFullProduction = connectionFlags.auth && connectionFlags.database && connectionFlags.deploy;
@@ -60,17 +62,25 @@ export async function createApp(
   
   logger.newLine();
 
-  // Step 1: Download template
+  // Step 1: Download/copy template
+  const templateSource = parseTemplateArg(options.template);
+
   const cloneSpinner = ora({
-    text: 'Downloading template...',
+    text: templateSource.type === 'local' ? 'Copying local template...' : 'Downloading template...',
     spinner: 'line'
   }).start();
-  
+
   try {
-    await downloadTemplate(options.template, directory, options.branch);
-    cloneSpinner.succeed('Template downloaded successfully');
+    if (templateSource.type === 'local') {
+      logger.info(`Using local template: ${templateSource.localPath}`);
+      await copyLocalTemplate(templateSource.localPath!, directory);
+    } else {
+      logger.info(`Using template: ${templateSource.url}`);
+      await downloadTemplate(templateSource.url!, directory, templateSource.branch || 'main');
+    }
+    cloneSpinner.succeed(templateSource.type === 'local' ? 'Local template copied successfully' : 'Template downloaded successfully');
   } catch (error) {
-    cloneSpinner.fail('Failed to download template');
+    cloneSpinner.fail(templateSource.type === 'local' ? 'Failed to copy local template' : 'Failed to download template');
     throw error;
   }
 
@@ -104,7 +114,10 @@ export async function createApp(
       if (databaseProvider) servicesToAuthenticate.push(databaseProvider);
     }
     if (connectionFlags.auth) servicesToAuthenticate.push('firebase');
-    if (connectionFlags.deploy) servicesToAuthenticate.push('cloudflare');
+    if (connectionFlags.deploy) {
+      const deployProvider = getDeployProvider(options);
+      servicesToAuthenticate.push(deployProvider);
+    }
     
     console.log(chalk.blue('🔐 Authenticating with selected production services...'));
     
@@ -118,20 +131,20 @@ export async function createApp(
     name,
     directory,
     database: connectionFlags.database 
-      ? await setupDatabaseWithRetry(getDatabaseProvider(options), undefined, options.fast, name)
+      ? await setupDatabaseWithRetry(getDatabaseProvider(options), undefined, options.fast, name, configData)
       : { url: 'postgresql://postgres:password@localhost:5433/postgres', provider: 'other' as const },
     firebase: connectionFlags.auth 
-      ? await setupFirebaseWithRetry(undefined, options.fast, name)
+      ? await setupFirebaseWithRetry(undefined, options.fast, name, configData)
       : { 
           projectId: 'demo-project', 
           apiKey: 'demo-api-key', 
           messagingSenderId: 'demo-sender-id', 
           appId: 'demo-app-id', 
           measurementId: 'demo-measurement-id',
-          allowAnonymous: true  // Local emulator mode allows anonymous users
+          allowAnonymous: true
         },
     cloudflare: connectionFlags.deploy 
-      ? await setupCloudflare(name, options.fast || false)
+      ? await setupCloudflare(name, options.fast || false, configData)
       : { workerName: `${name}-local` }
   };
 
@@ -214,23 +227,25 @@ export async function createApp(
   }
   
   if (connectionFlags.deploy) {
-    console.log(chalk.white('  • Production deployment ready'));
+    console.log(chalk.white('  • Cloudflare Workers deployment (API + static assets)'));
   } else {
     console.log(chalk.white('  • Local development ready'));
   }
   
   logger.newLine();
   
+  const cdPath = isCurrentDirectory ? null : path.relative(process.cwd(), directory);
+
   if (postSetupSucceeded) {
     console.log(chalk.green.bold('▶️  Next steps:'));
-    if (!isCurrentDirectory) {
-      console.log(chalk.cyan(`   cd ${name}`));
+    if (cdPath) {
+      console.log(chalk.cyan(`   cd ${cdPath}`));
     }
     console.log(chalk.cyan('   pnpm run dev'));
   } else {
     console.log(chalk.yellow.bold('🔧 Fix setup issues first:'));
-    if (!isCurrentDirectory) {
-      console.log(chalk.cyan(`   cd ${name}`));
+    if (cdPath) {
+      console.log(chalk.cyan(`   cd ${cdPath}`));
     }
     console.log(chalk.cyan('   pnpm post-setup'));
     console.log(chalk.gray('   Then run: pnpm run dev'));
@@ -256,7 +271,7 @@ export async function createApp(
   
   // Ask if user wants to start the app now (only if setup succeeded)
   if (postSetupSucceeded) {
-    const startNow = await askToStartDevelopmentServer();
+    const startNow = await askToStartDevelopmentServer(configData);
 
     if (startNow) {
     logger.newLine();
@@ -289,7 +304,9 @@ export async function createApp(
     } catch (error) {
       logger.error('Failed to start the development server');
       logger.info('You can start it manually by running:');
-      console.log(chalk.cyan(`   cd ${name}`));
+      if (cdPath) {
+        console.log(chalk.cyan(`   cd ${cdPath}`));
+      }
       console.log(chalk.cyan('   pnpm run dev'));
     }
     }
@@ -298,8 +315,8 @@ export async function createApp(
     logger.newLine();
     console.log(chalk.yellow.bold('🛠️  Troubleshooting:'));
     console.log(chalk.white('Complete the setup first, then you can start your app:'));
-    if (!isCurrentDirectory) {
-      console.log(chalk.cyan(`   cd ${name}`));
+    if (cdPath) {
+      console.log(chalk.cyan(`   cd ${cdPath}`));
     }
     console.log(chalk.cyan('   pnpm post-setup'));
     console.log(chalk.cyan('   pnpm run dev'));
@@ -307,9 +324,12 @@ export async function createApp(
 }
 
 function getDatabaseProvider(options: CreateOptions): string | undefined {
-  // Check for specific provider from --database flag
   if (typeof options.database === 'string') return options.database;
-  
-  // Fallback to --db flag or fast mode default
-  return options.db || (options.fast ? 'neon' : undefined);
-} 
+  return options.fast ? 'neon' : undefined;
+}
+
+function getDeployProvider(options: CreateOptions): string {
+  if (typeof options.deploy === 'string') return options.deploy;
+  return 'cloudflare';
+}
+

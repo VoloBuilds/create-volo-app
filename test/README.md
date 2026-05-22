@@ -15,6 +15,12 @@ npm run verify
 
 # Test in Docker
 npm run test:docker
+
+# End-to-end smoke test against a local volo-app template (from repo root)
+pnpm test:volo-flow
+pnpm test:volo-flow:dev
+pnpm test:volo-flow:stop
+pnpm test:volo-flow:cleanup
 ```
 
 For detailed testing instructions, see the README files in each directory. 

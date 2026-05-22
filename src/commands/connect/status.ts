@@ -49,28 +49,28 @@ export async function showConnectionStatus(projectPath: string): Promise<void> {
   
   // Show connection commands
   console.log(chalk.cyan('🔧 Available Connection Commands:'));
-  
+
   if (firebaseStatus.status === 'local') {
-    console.log(`   ${chalk.yellow('npx create-volo-app --connect --auth')}     - Connect to production Firebase Auth`);
+    console.log(`   ${chalk.yellow('pnpm connect:auth')}              - Connect to production Firebase Auth`);
   } else {
-    console.log(`   ${chalk.green('npx create-volo-app --connect --auth')}     - Reconfigure Firebase Auth (currently production)`);
+    console.log(`   ${chalk.green('pnpm connect:auth')}              - Reconfigure Firebase Auth (currently production)`);
   }
-  
+
   if (databaseStatus.status === 'local') {
-    console.log(`   ${chalk.yellow('npx create-volo-app --connect --database')} - Connect to production database`);
-    console.log(`   ${chalk.yellow('npx create-volo-app --connect --database neon')} - Connect to Neon specifically`);
-    console.log(`   ${chalk.yellow('npx create-volo-app --connect --database supabase')} - Connect to Supabase specifically`);
+    console.log(`   ${chalk.yellow('pnpm connect:database')}          - Connect to production database`);
+    console.log(`   ${chalk.yellow('pnpm connect:database:neon')}     - Connect to Neon specifically`);
+    console.log(`   ${chalk.yellow('pnpm connect:database:supabase')} - Connect to Supabase specifically`);
   } else {
-    console.log(`   ${chalk.green('npx create-volo-app --connect --database')} - Reconfigure database (currently production)`);
+    console.log(`   ${chalk.green('pnpm connect:database')}          - Reconfigure database (currently production)`);
   }
-  
+
   if (deploymentStatus.status === 'local') {
-    console.log(`   ${chalk.yellow('npx create-volo-app --connect --deploy')}   - Set up production deployment`);
+    console.log(`   ${chalk.yellow('pnpm connect:deploy')}            - Set up production deployment`);
   } else {
-    console.log(`   ${chalk.green('npx create-volo-app --connect --deploy')}   - Reconfigure deployment (currently production)`);
+    console.log(`   ${chalk.green('pnpm connect:deploy')}            - Reconfigure deployment (currently production)`);
   }
-  
-  console.log(`   ${chalk.blue('npx create-volo-app --status')} - Show this status (current command)`);
+
+  console.log(`   ${chalk.blue('pnpm connection:status')}          - Show this status (current command)`);
   
   // Summary and recommendations
   const productionCount = [firebaseStatus, databaseStatus, deploymentStatus]

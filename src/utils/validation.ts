@@ -1,14 +1,3 @@
-export function validateProjectName(name: string): boolean {
-  // Project name should be:
-  // - lowercase
-  // - contain only letters, numbers, and hyphens
-  // - not start or end with hyphen
-  // - not be empty
-  // - reasonable length
-  const regex = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-  return name.length > 0 && name.length <= 50 && regex.test(name);
-}
-
 export function validateFirebaseProjectId(projectId: string): boolean {
   // Firebase project IDs should be:
   // - 6-30 characters

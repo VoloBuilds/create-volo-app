@@ -114,19 +114,26 @@ async function checkPrerequisite(prereq: Prerequisite): Promise<PrerequisiteResu
 }
 
 export async function checkPrerequisites(options: PrerequisiteOptions = {}): Promise<CheckPrerequisitesResult> {
+  // Fast mode implies auto-install: skip prompts and accept sensible defaults.
+  if (options.fastMode) {
+    options.autoInstall = true;
+  }
+
   const hasNetwork = await checkNetworkConnectivity();
   if (!hasNetwork) {
     logger.warning('No internet connection detected. Some features may not work properly.');
     logger.info('Please ensure you have a stable internet connection and try again.');
-    
-    const { continueOffline } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'continueOffline',
-        message: 'Continue anyway? (You can set up services manually later)',
-        default: false
-      }
-    ]);
+
+    const continueOffline = options.fastMode
+      ? true
+      : (await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'continueOffline',
+            message: 'Continue anyway? (You can set up services manually later)',
+            default: false
+          }
+        ])).continueOffline;
 
     if (!continueOffline) {
       process.exit(1);
@@ -210,8 +217,9 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
       }
     }
 
-    // Handle tools that are only available locally but could be installed globally
-    if (localOnly.length > 0 && !options.autoInstall) {
+    // Handle tools that are only available locally but could be installed globally.
+    // In fast mode we still enter this block (autoInstall is true) and auto-upgrade.
+    if (localOnly.length > 0 && (!options.autoInstall || options.fastMode)) {
       logger.newLine();
       console.log(chalk.cyan.bold('🔄 Local Installation Detected'));
       logger.newLine();
@@ -231,14 +239,16 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
       console.log(chalk.white('  • Better IDE integration'));
       logger.newLine();
 
-      const { upgradeToGlobal } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'upgradeToGlobal',
-          message: 'Would you like to install these tools globally?',
-          default: true
-        }
-      ]);
+      const upgradeToGlobal = options.fastMode
+        ? true
+        : (await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'upgradeToGlobal',
+              message: 'Would you like to install these tools globally?',
+              default: true
+            }
+          ])).upgradeToGlobal;
 
       if (upgradeToGlobal) {
         logger.newLine();
@@ -391,7 +401,9 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
       }
       
       if (systemTools.length > 0) {
-        const shouldContinue = await displayManualInstallInstructions(systemTools);
+        const shouldContinue = options.fastMode
+          ? true
+          : await displayManualInstallInstructions(systemTools);
         if (!shouldContinue) {
           recheckNeeded = true;
           continue;
@@ -412,14 +424,16 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
         console.log('');
       }
 
-      const { shouldContinue } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'shouldContinue',
-          message: 'Would you like to continue with outdated tools? (May cause issues)',
-          default: false
-        }
-      ]);
+      const shouldContinue = options.fastMode
+        ? true
+        : (await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'shouldContinue',
+              message: 'Would you like to continue with outdated tools? (May cause issues)',
+              default: false
+            }
+          ])).shouldContinue;
 
       if (!shouldContinue) {
         logger.info('Please update the outdated tools and run create-volo-app again.');

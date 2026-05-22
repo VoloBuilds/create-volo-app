@@ -4,6 +4,7 @@ import { execa } from 'execa';
 import ora from 'ora';
 import { logger } from '../utils/logger.js';
 import { execSupabase } from '../utils/cli.js';
+import type { VoloConfig } from '../utils/config.js';
 
 interface DatabaseConfig {
   url: string;
@@ -225,14 +226,23 @@ async function promptForPassword(projectRef: string, fastMode = false): Promise<
 
 // === PROJECT SELECTION ===
 
-async function selectOrCreateProject(fastMode: boolean, projectName?: string): Promise<{ project: SupabaseProject; password: string } | null> {
+async function selectOrCreateProject(
+  fastMode: boolean,
+  projectName?: string,
+  configAction?: 'create' | 'existing',
+  configProjectName?: string
+): Promise<{ project: SupabaseProject; password: string } | null> {
   const projects = await listSupabaseProjects();
-  const defaultProjectName = `${projectName || 'volo-app'}-db`;
+  const defaultProjectName = configProjectName || `${projectName || 'volo-app'}-db`;
 
-  // Fast mode or no existing projects: create new project
-  if (fastMode || projects.length === 0) {
+  const shouldCreate = configAction === 'create' || fastMode || projects.length === 0;
+  const shouldSelectExisting = configAction === 'existing' && projects.length > 0;
+
+  if (shouldCreate && !shouldSelectExisting) {
     if (projects.length === 0) {
       console.log(chalk.yellow('No existing Supabase projects found.'));
+    } else if (configAction === 'create') {
+      console.log(chalk.blue('Creating new Supabase project (from config)...'));
     } else if (fastMode) {
       console.log(chalk.blue('Creating new Supabase project (fast mode)...'));
     }
@@ -314,9 +324,21 @@ async function selectOrCreateProject(fastMode: boolean, projectName?: string): P
 
 // === MAIN SETUP FUNCTIONS ===
 
-export async function setupSupabaseDatabase(fastMode = false, projectName?: string): Promise<DatabaseConfig> {
+export async function setupSupabaseDatabase(fastMode = false, projectName?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
   logger.info('Setting up Supabase database...');
   logger.newLine();
+
+  // If config provides a connection string directly, use it (no prompt or CLI required)
+  const configuredConnString = configData?.database?.connectionString;
+  if (configuredConnString) {
+    logger.info('Using Supabase connection string from config');
+    logger.success('Supabase database configured!');
+    logger.newLine();
+    return {
+      url: configuredConnString,
+      provider: 'supabase'
+    };
+  }
 
   // Check prerequisites
   const hasSupabaseCLI = await checkSupabaseCLI();
@@ -335,7 +357,8 @@ export async function setupSupabaseDatabase(fastMode = false, projectName?: stri
   const spinner = ora('Loading your Supabase projects...').start();
   spinner.stop();
 
-  const result = await selectOrCreateProject(fastMode, projectName);
+  const dbConfig = configData?.database;
+  const result = await selectOrCreateProject(fastMode, projectName, dbConfig?.action, dbConfig?.projectName);
   if (!result) {
     logger.warning('Failed to set up project. Using manual setup instead.');
     return await setupSupabaseDatabaseManual();

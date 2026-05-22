@@ -1,0 +1,17 @@
+{
+  "$schema": "../volo-config.schema.json",
+  "projectName": "my-app",
+  "auth": {
+    "action": "existing",
+    "projectId": "my-firebase-project",
+    "allowAnonymous": true
+  },
+  "database": {
+    "provider": "neon",
+    "action": "existing",
+    "connectionString": "postgresql://user:pass@host/db"
+  },
+  "deploy": {
+    "workerName": "my-app-api"
+  }
+}

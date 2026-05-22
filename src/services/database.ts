@@ -4,6 +4,7 @@ import ora from 'ora';
 import { logger } from '../utils/logger.js';
 import { validateUrl } from '../utils/validation.js';
 import { execNeonctl } from '../utils/neonctl.js';
+import type { VoloConfig } from '../utils/config.js';
 
 interface DatabaseConfig {
   url: string;
@@ -17,7 +18,15 @@ interface NeonProject {
   pg_version: number;
 }
 
-export async function setupDatabase(databasePreference?: string, fastMode = false, projectName?: string): Promise<DatabaseConfig> {
+export async function setupDatabase(databasePreference?: string, fastMode = false, projectName?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
+  const dbConfig = configData?.database;
+
+  // If config provides a connection string directly, use it
+  if (dbConfig?.connectionString) {
+    logger.info(`Using database connection string from config`);
+    return { url: dbConfig.connectionString, provider: dbConfig.provider || 'other' };
+  }
+
   logger.newLine();
   console.log(chalk.yellow.bold('🗄️  Setting up PostgreSQL Database'));
   console.log(chalk.white('Your app needs a database to store application data (posts, user profiles, etc).'));
@@ -26,7 +35,12 @@ export async function setupDatabase(databasePreference?: string, fastMode = fals
 
   let provider: string;
 
-  if (databasePreference && ['neon', 'supabase', 'other'].includes(databasePreference)) {
+  // Config-driven: provider comes from config.database.provider
+  if (dbConfig?.provider) {
+    provider = dbConfig.provider;
+    logger.info(`Using database provider from config: ${provider}`);
+    logger.newLine();
+  } else if (databasePreference && ['neon', 'supabase', 'other'].includes(databasePreference)) {
     provider = databasePreference;
     logger.info(`Using your preferred database provider: ${provider}`);
     logger.newLine();
@@ -64,13 +78,13 @@ export async function setupDatabase(databasePreference?: string, fastMode = fals
 
   switch (provider) {
     case 'neon':
-      return await setupNeonDatabase(fastMode, projectName);
+      return await setupNeonDatabase(fastMode, projectName, configData);
     case 'supabase':
       // Import and use the dedicated Supabase service
       const { setupSupabaseDatabase } = await import('./supabase.js');
-      return await setupSupabaseDatabase(fastMode, projectName);
+      return await setupSupabaseDatabase(fastMode, projectName, configData);
     case 'other':
-      return await setupOtherDatabase();
+      return await setupOtherDatabase(configData);
     default:
       throw new Error('Invalid database provider selected');
   }
@@ -161,9 +175,13 @@ async function getNeonConnectionString(projectId: string): Promise<string | null
   }
 }
 
-async function setupNeonDatabase(fastMode = false, projectName?: string): Promise<DatabaseConfig> {
+async function setupNeonDatabase(fastMode = false, projectName?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
   logger.info('Setting up Neon database...');
   logger.newLine();
+
+  const dbConfig = configData?.database;
+  const configAction = dbConfig?.action;
+  const configProjectName = dbConfig?.projectName;
 
   // Check if Neon CLI is available with a timeout fallback
   logger.debug('Starting neonctl CLI availability check...');
@@ -211,9 +229,15 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
   const projects = await listNeonProjects();
   spinner.stop();
 
-  if (projects.length === 0 || fastMode) {
+  // Config-driven: action determines create vs existing without prompting
+  const shouldCreate = configAction === 'create' || fastMode || projects.length === 0;
+  const shouldSelectExisting = configAction === 'existing' && projects.length > 0;
+
+  if (shouldCreate && !shouldSelectExisting) {
     if (projects.length === 0) {
       console.log(chalk.yellow('No existing Neon projects found.'));
+    } else if (configAction === 'create') {
+      console.log(chalk.blue('Creating new Neon project (from config)...'));
     } else if (fastMode) {
       console.log(chalk.blue('Creating new Neon project (fast mode)...'));
     }
@@ -221,8 +245,9 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
     
     let dbProjectName: string;
     
-    if (fastMode) {
-      // Use project name in fast mode
+    if (configProjectName) {
+      dbProjectName = configProjectName;
+    } else if (fastMode) {
       dbProjectName = `${projectName || 'volo-app'}-db`;
     } else {
       const response = await inquirer.prompt([
@@ -269,7 +294,7 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
   // Declare projectId at function scope
   let projectId: string;
 
-  // User has existing projects but not in fast mode
+  // User has existing projects — either config says 'existing' or interactive selection
   if (!fastMode) {
     console.log(chalk.green(`Found ${projects.length} existing Neon project(s)`));
     logger.newLine();
@@ -326,7 +351,7 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
     }
   } else {
     // Fast mode: create new project even if existing ones exist
-    const dbProjectName = `${projectName || 'volo-app'}-db`;
+    const dbProjectName = configProjectName || `${projectName || 'volo-app'}-db`;
     
     const newProject = await createNeonProject(dbProjectName);
     if (!newProject) {
@@ -405,9 +430,21 @@ async function setupNeonDatabaseManual(): Promise<DatabaseConfig> {
   };
 }
 
-export async function setupOtherDatabase(): Promise<DatabaseConfig> {
+export async function setupOtherDatabase(configData?: VoloConfig): Promise<DatabaseConfig> {
   logger.info('Setting up custom PostgreSQL database...');
   logger.newLine();
+
+  // If config provides a connection string directly, use it (no prompt)
+  const configuredConnString = configData?.database?.connectionString;
+  if (configuredConnString) {
+    logger.info('Using PostgreSQL connection string from config');
+    logger.success('Custom PostgreSQL database configured!');
+    logger.newLine();
+    return {
+      url: configuredConnString,
+      provider: 'other'
+    };
+  }
 
   console.log(chalk.gray('You can use any PostgreSQL provider that gives you a connection string.'));
   console.log(chalk.gray('Popular options include:'));

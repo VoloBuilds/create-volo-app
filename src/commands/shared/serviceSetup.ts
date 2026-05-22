@@ -5,23 +5,28 @@ import { setupFirebase, FirebaseProjectIdConflictError, FirebaseTermsOfServiceEr
 import { setupDatabase } from '../../services/database.js';
 import { ProjectConfig } from '../shared/types.js';
 import { askToRetrySetup } from '../shared/prompts.js';
+import type { VoloConfig } from '../../utils/config.js';
 
-export async function setupFirebaseWithRetry(maxRetries = 2, fastMode = false, projectName?: string): Promise<ProjectConfig['firebase']> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+export async function setupFirebaseWithRetry(maxRetries = 2, fastMode = false, projectName?: string, configData?: VoloConfig): Promise<ProjectConfig['firebase']> {
+  // In config mode, fail fast: do not retry on errors.
+  const effectiveMaxRetries = configData ? 1 : maxRetries;
+  for (let attempt = 1; attempt <= effectiveMaxRetries; attempt++) {
     try {
-      return await setupFirebase(fastMode, projectName);
+      return await setupFirebase(fastMode, projectName, configData);
     } catch (error) {
       // Handle Firebase first-time setup requirement
       if (error instanceof FirebaseFirstTimeSetupError) {
         logger.error('Firebase first-time setup required - please create your first project manually');
         throw error;
       }
-      
+
+      const isLastAttempt = attempt === effectiveMaxRetries;
+
       // Handle Firebase Terms of Service errors specially
       if (error instanceof FirebaseTermsOfServiceError) {
-        logger.warning(`Firebase setup failed (attempt ${attempt}/${maxRetries}) - Terms of Service required`);
-        
-        if (attempt === maxRetries) {
+        logger.warning(`Firebase setup failed (attempt ${attempt}/${effectiveMaxRetries}) - Terms of Service required`);
+
+        if (isLastAttempt) {
           logger.error('Firebase setup failed after multiple attempts - Terms of Service not accepted');
           throw error;
         }
@@ -43,12 +48,12 @@ export async function setupFirebaseWithRetry(maxRetries = 2, fastMode = false, p
         logger.info('Retrying Firebase setup...');
         continue;
       }
-      
+
       // Handle Firebase project ID conflicts specially
       if (error instanceof FirebaseProjectIdConflictError) {
-        logger.warning(`Firebase setup failed (attempt ${attempt}/${maxRetries}) - Project ID already exists`);
-        
-        if (attempt === maxRetries) {
+        logger.warning(`Firebase setup failed (attempt ${attempt}/${effectiveMaxRetries}) - Project ID already exists`);
+
+        if (isLastAttempt) {
           logger.error('Firebase setup failed after multiple attempts - try a different project name');
           throw error;
         }
@@ -61,11 +66,11 @@ export async function setupFirebaseWithRetry(maxRetries = 2, fastMode = false, p
         logger.info('Retrying Firebase setup...');
         continue;
       }
-      
+
       // Handle other Firebase errors
-      logger.warning(`Firebase setup failed (attempt ${attempt}/${maxRetries})`);
-      
-      if (attempt === maxRetries) {
+      logger.warning(`Firebase setup failed (attempt ${attempt}/${effectiveMaxRetries})`);
+
+      if (isLastAttempt) {
         logger.error('Firebase setup failed after multiple attempts');
         logger.newLine();
         console.log(chalk.yellow.bold('⚡ Manual Firebase setup required:'));
@@ -82,29 +87,31 @@ export async function setupFirebaseWithRetry(maxRetries = 2, fastMode = false, p
       logger.info('Retrying Firebase setup...');
     }
   }
-  
+
   throw new Error('Firebase setup failed');
 }
 
-export async function setupDatabaseWithRetry(databasePreference?: string, maxRetries = 2, fastMode = false, projectName?: string): Promise<ProjectConfig['database']> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+export async function setupDatabaseWithRetry(databasePreference?: string, maxRetries = 2, fastMode = false, projectName?: string, configData?: VoloConfig): Promise<ProjectConfig['database']> {
+  // In config mode, fail fast: do not retry on errors.
+  const effectiveMaxRetries = configData ? 1 : maxRetries;
+  for (let attempt = 1; attempt <= effectiveMaxRetries; attempt++) {
     try {
       switch (databasePreference) {
         case 'neon':
-          return await setupDatabase(databasePreference, fastMode, projectName);
+          return await setupDatabase(databasePreference, fastMode, projectName, configData);
         case 'supabase':
           const { setupSupabaseDatabase } = await import('../../services/supabase.js');
-          return await setupSupabaseDatabase(fastMode, projectName);
+          return await setupSupabaseDatabase(fastMode, projectName, configData);
         case 'other':
           const { setupOtherDatabase } = await import('../../services/database.js');
-          return await setupOtherDatabase();
+          return await setupOtherDatabase(configData);
         default:
-          return await setupDatabase(databasePreference, fastMode, projectName); // fallback
+          return await setupDatabase(databasePreference, fastMode, projectName, configData);
       }
     } catch (error) {
-      logger.warning(`Database setup failed (attempt ${attempt}/${maxRetries})`);
-      
-      if (attempt === maxRetries) {
+      logger.warning(`Database setup failed (attempt ${attempt}/${effectiveMaxRetries})`);
+
+      if (attempt === effectiveMaxRetries) {
         logger.error('Database setup failed after multiple attempts');
         logger.newLine();
         console.log(chalk.yellow.bold('⚡ Manual database setup required:'));
@@ -123,6 +130,6 @@ export async function setupDatabaseWithRetry(databasePreference?: string, maxRet
       logger.info('Retrying database setup...');
     }
   }
-  
+
   throw new Error('Database setup failed');
 } 

@@ -5,20 +5,19 @@ import path from 'path';
 import { setupCloudflare } from '../../services/cloudflare.js';
 import { 
   createReadlineInterface, 
-  question, 
   getProjectNameFromPackageJson,
   confirmProductionSetup,
   confirmReconfiguration
 } from './shared.js';
-import readline from 'readline';
 import { parseEnvFile } from '../../utils/env.js';
+import { generateUICloudflareConfig } from '../../utils/modularConfig.js';
 
 export async function connectDeploy(projectPath: string): Promise<void> {
   const rl = createReadlineInterface();
   
   try {
     console.log(chalk.cyan.bold('🚀 Production Deployment Setup'));
-    console.log('This will set up production deployment using Cloudflare Workers + Pages.\n');
+    console.log('This will set up production deployment using Cloudflare Workers.\n');
     
     // Check current deployment configuration
     const currentConfig = await detectCurrentDeploymentConfig(projectPath);
@@ -61,10 +60,10 @@ export async function connectDeploy(projectPath: string): Promise<void> {
     console.log(chalk.blue('\n🔐 Setting up Cloudflare...'));
     const cloudflareResult = await setupCloudflare(projectName, false);
     
-      // Update wrangler configuration
-  await updateWranglerConfig(projectPath, { workerName: cloudflareResult.workerName });
-  
-  // Note: Using src/api.ts as entry point (already CF Workers compatible)
+    // Update wrangler configurations
+    await updateWranglerConfig(projectPath, { workerName: cloudflareResult.workerName });
+    await generateUICloudflareConfig(projectPath, cloudflareResult.workerName);
+    console.log(chalk.green('✅ UI wrangler configuration and package.json updated'));
     
     // Update package.json scripts for Cloudflare development
     await updatePackageJsonForCloudflare(projectPath);
@@ -73,18 +72,22 @@ export async function connectDeploy(projectPath: string): Promise<void> {
     await setupWorkerEnvironment(projectPath);
     
     // Provide deployment instructions
-    await setupPagesDeployment(rl);
+    showDeploymentInstructions();
     
     console.log(chalk.green('\n🎉 Production deployment setup completed!'));
     console.log(chalk.cyan('\n📋 Next steps:'));
-    console.log(`   1. Deploy your API: cd server && pnpm run deploy`);
-    console.log('   2. Set up Cloudflare Pages for your frontend (see instructions above)');
+    console.log(`   1. Deploy both: pnpm run deploy (from root)`);
+    console.log('   2. Or deploy individually:');
+    console.log('      - API:  cd server && pnpm run deploy');
+    console.log('      - UI:   cd ui && pnpm run deploy');
     console.log('   3. Update your frontend environment variables with production values');
     console.log('   4. Test your production deployment thoroughly');
     
     console.log(chalk.blue('\n🔧 Useful commands:'));
-    console.log('   - Deploy Worker: cd server && pnpm run deploy');
-    console.log('   - View Worker logs: cd server && npx wrangler tail');
+    console.log('   - Deploy all:     pnpm run deploy');
+    console.log('   - Deploy API:     cd server && pnpm run deploy');
+    console.log('   - Deploy UI:      cd ui && pnpm run deploy');
+    console.log('   - View API logs:  cd server && npx wrangler tail');
     console.log('   - Update secrets: cd server && npx wrangler secret put VARIABLE_NAME');
     
   } catch (error) {
@@ -96,21 +99,22 @@ export async function connectDeploy(projectPath: string): Promise<void> {
 }
 
 async function detectCurrentDeploymentConfig(projectPath: string) {
-  const wranglerPath = path.join(projectPath, 'server', 'wrangler.toml');
+  const serverWranglerPath = path.join(projectPath, 'server', 'wrangler.toml');
+  const uiWranglerPath = path.join(projectPath, 'ui', 'wrangler.toml');
   
-  if (!existsSync(wranglerPath)) {
+  if (!existsSync(serverWranglerPath) && !existsSync(uiWranglerPath)) {
     return { isConfigured: false, workerName: null };
   }
   
+  if (!existsSync(serverWranglerPath)) {
+    return { isConfigured: true, workerName: null };
+  }
+  
   try {
-    const wranglerContent = await readFile(wranglerPath, 'utf-8');
+    const wranglerContent = await readFile(serverWranglerPath, 'utf-8');
     const nameMatch = wranglerContent.match(/name\s*=\s*["']([^"']+)["']/);
-    
-    return {
-      isConfigured: !!nameMatch,
-      workerName: nameMatch?.[1] || null
-    };
-  } catch (error) {
+    return { isConfigured: true, workerName: nameMatch?.[1] || null };
+  } catch {
     return { isConfigured: false, workerName: null };
   }
 }
@@ -147,7 +151,7 @@ async function updateWranglerConfig(projectPath: string, config: any) {
   );
 
   await writeFile(wranglerPath, wranglerConfig);
-  console.log(chalk.green(`✅ Wrangler configuration updated with ${Object.keys(allEnvVars).length} environment variables`));
+  console.log(chalk.green(`✅ Server wrangler configuration updated with ${Object.keys(allEnvVars).length} environment variables`));
 }
 
 function generateVarsSection(envVars: Record<string, string>): string {
@@ -197,20 +201,21 @@ async function updatePackageJsonForCloudflare(projectPath: string) {
     console.log(chalk.green('✅ Server package.json updated for Cloudflare development'));
   }
   
-  // Also update root package.json to add dev:node fallback script
+  // Update root package.json with deploy script and dev:node fallback
   const rootPackageJsonPath = path.join(projectPath, 'package.json');
   
   if (existsSync(rootPackageJsonPath)) {
     const packageJson = JSON.parse(await readFile(rootPackageJsonPath, 'utf-8'));
     
     if (packageJson.scripts) {
+      packageJson.scripts['deploy'] = 'cd server && pnpm run deploy && cd ../ui && pnpm run deploy';
       packageJson.scripts['dev:node'] = packageJson.scripts.dev
         ? packageJson.scripts.dev.replace('cd server && pnpm dev', 'cd server && pnpm dev:node')
         : 'cd server && pnpm dev:node';
     }
     
     await writeFile(rootPackageJsonPath, JSON.stringify(packageJson, null, 2));
-    console.log(chalk.green('✅ Root package.json updated for Cloudflare development'));
+    console.log(chalk.green('✅ Root package.json updated for Cloudflare deployment'));
   }
 }
 
@@ -285,32 +290,12 @@ async function setupWorkerEnvironment(projectPath: string) {
   console.log(chalk.green('✅ Worker environment configuration prepared'));
 }
 
-async function setupPagesDeployment(rl: readline.Interface) {
-  console.log(chalk.cyan('\n📄 Setting up Cloudflare Pages deployment'));
-  console.log('For the frontend, you\'ll need to connect your Git repository to Cloudflare Pages.\n');
+function showDeploymentInstructions() {
+  console.log(chalk.cyan('\n📄 Deployment configured'));
+  console.log('Both your API and frontend deploy as Cloudflare Workers.\n');
   
-  console.log(chalk.blue('📋 Steps to deploy your frontend:'));
-  console.log('1. Push your code to a Git repository (GitHub, GitLab, etc.)');
-  console.log('2. Go to https://dash.cloudflare.com/');
-  console.log('3. Navigate to "Workers & Pages" > "Create application" > "Pages"');
-  console.log('4. Connect your Git repository');
-  console.log('5. Configure build settings:');
-  console.log('   - Framework preset: Vite');
-  console.log('   - Build command: cd ui && pnpm run build');
-  console.log('   - Build output directory: ui/dist');
-  console.log('6. Add environment variables in Pages settings:');
-  console.log('   - Add your Firebase config variables');
-  console.log('   - Set VITE_API_URL to your Worker URL\n');
-  
-  const shouldOpenDashboard = await question(rl, 'Would you like to open Cloudflare Dashboard to set up Pages? (y/N): ');
-  
-  if (shouldOpenDashboard.toLowerCase() === 'y') {
-    try {
-      const { default: open } = await import('open');
-      await open('https://dash.cloudflare.com/');
-      console.log(chalk.green('🌐 Opened Cloudflare Dashboard in your browser'));
-    } catch (error) {
-      console.log(chalk.blue('Please visit: https://dash.cloudflare.com/'));
-    }
-  }
+  console.log(chalk.blue('📋 Deploy commands:'));
+  console.log('  Deploy API:   cd server && pnpm run deploy');
+  console.log('  Deploy UI:    cd ui && pnpm run deploy');
+  console.log('  Deploy both:  pnpm run deploy (from root)\n');
 } 

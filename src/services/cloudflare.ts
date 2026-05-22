@@ -4,6 +4,7 @@ import ora from 'ora';
 import { logger } from '../utils/logger.js';
 import { validateWorkerName } from '../utils/validation.js';
 import { execWrangler } from '../utils/cli.js';
+import type { VoloConfig } from '../utils/config.js';
 
 interface CloudflareConfig {
   workerName: string;
@@ -18,11 +19,13 @@ async function checkWranglerAuth(): Promise<boolean> {
   }
 }
 
-export async function setupCloudflare(projectName: string, fastMode = false): Promise<CloudflareConfig> {
+export async function setupCloudflare(projectName: string, fastMode = false, configData?: VoloConfig): Promise<CloudflareConfig> {
+  const deployConfig = configData?.deploy;
+
   logger.newLine();
   console.log(chalk.yellow.bold('🌐 Setting up Cloudflare Deployment'));
   console.log(chalk.white('Cloudflare hosts your app globally for lightning-fast performance.'));
-  console.log(chalk.white('Your backend API runs on Workers, frontend on Pages - both free tiers available!'));
+  console.log(chalk.white('API and frontend both deploy as Cloudflare Workers - free tier available!'));
   logger.newLine();
 
   // Check if user is authenticated with Cloudflare
@@ -37,15 +40,16 @@ export async function setupCloudflare(projectName: string, fastMode = false): Pr
     logger.success('Already authenticated with Cloudflare ✓');
   }
 
-  // Generate default worker name based on project name
   const defaultWorkerName = `${projectName}-api`;
 
   let workerName: string;
-  
-  if (fastMode) {
-    // In fast mode, use the default worker name without prompting
+
+  if (deployConfig?.workerName) {
+    workerName = deployConfig.workerName;
+    logger.info(`Using worker name from config: ${workerName}`);
+  } else if (fastMode || deployConfig) {
     workerName = defaultWorkerName;
-    logger.info(`Using worker name: ${workerName} (fast mode)`);
+    logger.info(`Using worker name: ${workerName}${fastMode ? ' (fast mode)' : ' (per config)'}`);
   } else {
     const response = await inquirer.prompt([
       {

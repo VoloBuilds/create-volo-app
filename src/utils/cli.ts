@@ -161,6 +161,10 @@ export async function execSupabase(
   return execCli('supabase', args, options);
 }
 
+function isMissingCommand(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
 /**
  * Executes pnpm command, installing pnpm if necessary
  */
@@ -174,73 +178,85 @@ export async function execPnpm(
     ...options
   };
 
-  // First try global pnpm installation
   try {
-    await which('pnpm');
-    logger.debug(`Using global pnpm`);
+    const pnpmPath = await which('pnpm');
+    logger.debug(`Using pnpm from PATH: ${pnpmPath}`);
     return await execa('pnpm', args, defaultOptions);
-  } catch (globalError) {
-    logger.debug(`Global pnpm not found, checking for local installation`);
-    
-    // Try local pnpm via npx before attempting to install
-    try {
-      logger.debug(`Trying local pnpm via npx`);
-      return await execa('npx', ['pnpm', ...args], defaultOptions);
-    } catch (localError) {
-      logger.debug(`Local pnpm also not found, attempting to install pnpm`);
-    
-    // Import the installation utilities
-    const { installCliTool } = await import('./prerequisites/installCLIs.js');
-    const { corePrerequisites } = await import('./prerequisites/prereqList.js');
-    
-    // Find pnpm prerequisite
-    const pnpmPrereq = corePrerequisites.find(p => p.command === 'pnpm');
-    if (!pnpmPrereq) {
-      throw new Error('pnpm prerequisite configuration not found');
+  } catch (error) {
+    if (!isMissingCommand(error)) {
+      throw error;
     }
-    
-    // Try to install pnpm globally first, then locally if that fails
-    let pnpmInstalled = false;
-    
+  }
+
+  logger.debug(`pnpm not found on PATH, trying npx`);
+
+  try {
+    return await execa('npx', ['pnpm', ...args], defaultOptions);
+  } catch (error) {
+    if (!isMissingCommand(error)) {
+      throw error;
+    }
+  }
+
+  logger.debug(`pnpm not available via npx, attempting to install pnpm`);
+
+  // Import the installation utilities
+  const { installCliTool } = await import('./prerequisites/installCLIs.js');
+  const { corePrerequisites } = await import('./prerequisites/prereqList.js');
+
+  // Find pnpm prerequisite
+  const pnpmPrereq = corePrerequisites.find(p => p.command === 'pnpm');
+  if (!pnpmPrereq) {
+    throw new Error('pnpm prerequisite configuration not found');
+  }
+
+  // Try to install pnpm globally first, then locally if that fails
+  let pnpmInstalled = false;
+
+  try {
+    pnpmInstalled = await installCliTool(pnpmPrereq, true); // Try global install
+  } catch (error) {
+    logger.debug(`Global pnpm installation failed: ${error}`);
+  }
+
+  if (!pnpmInstalled) {
     try {
-      pnpmInstalled = await installCliTool(pnpmPrereq, true); // Try global install
+      pnpmInstalled = await installCliTool(pnpmPrereq, false); // Try local install
     } catch (error) {
-      logger.debug(`Global pnpm installation failed: ${error}`);
+      logger.debug(`Local pnpm installation failed: ${error}`);
     }
-    
-    if (!pnpmInstalled) {
-      try {
-        pnpmInstalled = await installCliTool(pnpmPrereq, false); // Try local install
-      } catch (error) {
-        logger.debug(`Local pnpm installation failed: ${error}`);
-      }
+  }
+
+  if (!pnpmInstalled) {
+    throw new Error(
+      `Failed to install pnpm. Please install it manually with: npm install -g pnpm\n` +
+      `Or visit: https://pnpm.io/installation`
+    );
+  }
+
+  try {
+    const pnpmPath = await which('pnpm');
+    logger.debug(`Using newly installed pnpm: ${pnpmPath}`);
+    return await execa('pnpm', args, defaultOptions);
+  } catch (error) {
+    if (!isMissingCommand(error)) {
+      throw error;
     }
-    
-    if (!pnpmInstalled) {
-      throw new Error(
-        `Failed to install pnpm. Please install it manually with: npm install -g pnpm\n` +
-        `Or visit: https://pnpm.io/installation`
-      );
+  }
+
+  logger.debug(`Global pnpm still not found, using npx for locally installed pnpm`);
+
+  try {
+    return await execa('npx', ['pnpm', ...args], defaultOptions);
+  } catch (error) {
+    if (!isMissingCommand(error)) {
+      throw error;
     }
-    
-    // Try to use pnpm again after installation
-    try {
-      await which('pnpm');
-      logger.debug(`Using newly installed global pnpm`);
-      return await execa('pnpm', args, defaultOptions);
-    } catch (stillMissingError) {
-      // If global install didn't work, try npx with locally installed pnpm
-      logger.debug(`Global pnpm still not found, using npx for locally installed pnpm`);
-      try {
-        return await execa('npx', ['pnpm', ...args], defaultOptions);
-      } catch (npxError) {
-        throw new Error(
-          `pnpm was installed but couldn't be executed. Please restart your terminal and try again.\n` +
-          `Or install pnpm globally with: npm install -g pnpm`
-        );
-      }
-    }
-    }
+
+    throw new Error(
+      `pnpm was installed but couldn't be executed. Please restart your terminal and try again.\n` +
+      `Or install pnpm globally with: npm install -g pnpm`
+    );
   }
 }
 

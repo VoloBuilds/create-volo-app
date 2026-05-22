@@ -4,6 +4,7 @@ import ora from 'ora';
 import { logger } from '../utils/logger.js';
 import { validateFirebaseProjectId } from '../utils/validation.js';
 import { execFirebase } from '../utils/cli.js';
+import type { VoloConfig } from '../utils/config.js';
 
 // Custom error for Firebase project ID conflicts
 export class FirebaseProjectIdConflictError extends Error {
@@ -70,7 +71,7 @@ async function checkFirebaseFirstTimeSetup(): Promise<boolean> {
   }
 }
 
-export async function setupFirebase(fastMode = false, projectName?: string): Promise<FirebaseConfig> {
+export async function setupFirebase(fastMode = false, projectName?: string, configData?: VoloConfig): Promise<FirebaseConfig> {
   logger.newLine();
   console.log(chalk.yellow.bold('🔐 Setting up Firebase Authentication'));
   console.log(chalk.white('Firebase handles secure user login/signup for your app.'));
@@ -91,9 +92,27 @@ export async function setupFirebase(fastMode = false, projectName?: string): Pro
     throw new FirebaseFirstTimeSetupError();
   }
 
+  const authConfig = configData?.auth;
+  const isConfigDriven = !!authConfig;
+
   let projectId: string;
 
-  if (fastMode) {
+  if (isConfigDriven) {
+    // Config-driven: skip the create/existing prompt
+    if (authConfig.action === 'existing') {
+      if (authConfig.projectId) {
+        projectId = authConfig.projectId;
+        logger.info(`Using existing Firebase project from config: ${projectId}`);
+      } else {
+        // Schema requires projectId when action is 'existing'; defensive fallback
+        projectId = await selectExistingProject(projectName);
+      }
+    } else {
+      // action === 'create'
+      const baseName = authConfig.displayName || projectName || 'volo-app';
+      projectId = await createFirebaseProjectFast(baseName);
+    }
+  } else if (fastMode) {
     // In fast mode, always create a new project with project name
     projectId = await createFirebaseProjectFast(projectName || 'volo-app');
   } else {
@@ -117,22 +136,33 @@ export async function setupFirebase(fastMode = false, projectName?: string): Pro
     }
   }
 
-  // Set up authentication (skip Google Sign-In in fast mode)
-  if (!fastMode) {
+  // Set up authentication (skip Google Sign-In in fast mode or when config opts out)
+  if (isConfigDriven) {
+    // Use the config value for setupGoogleSignIn (default true per schema)
+    const shouldSetupGoogleSignIn = authConfig.setupGoogleSignIn !== false;
+    if (shouldSetupGoogleSignIn) {
+      await setupFirebaseAuth(projectId, true);
+    } else {
+      logger.info('Skipping Google Sign-In setup (per config).');
+    }
+  } else if (!fastMode) {
     await setupFirebaseAuth(projectId);
   }
 
   // Ask about anonymous user access
   let allowAnonymous: boolean;
-  if (fastMode) {
-    // In fast mode, default to allowing anonymous users
+  if (isConfigDriven && authConfig.allowAnonymous !== undefined) {
+    allowAnonymous = authConfig.allowAnonymous;
+    logger.info(`Anonymous users ${allowAnonymous ? 'allowed' : 'disabled'} (per config).`);
+  } else if (fastMode || isConfigDriven) {
+    // In fast mode (or config without explicit allowAnonymous), default to allowing anonymous users
     allowAnonymous = true;
   } else {
     logger.newLine();
     console.log(chalk.gray('When enabled, users can explore your app immediately without authentication.'));
     console.log(chalk.gray('They can sign in later to associate their account with a permanent login.'));
     logger.newLine();
-    
+
     const { allowAnonymousAnswer } = await inquirer.prompt([
       {
         type: 'confirm',
@@ -145,12 +175,13 @@ export async function setupFirebase(fastMode = false, projectName?: string): Pro
   }
 
   // If anonymous auth is enabled, guide user to enable it in Firebase Console
+  // Treat config-driven runs like fastMode here so we don't block on confirmation prompts.
   if (allowAnonymous) {
-    await setupAnonymousAuth(projectId, fastMode);
+    await setupAnonymousAuth(projectId, fastMode || isConfigDriven);
   }
 
   // Create and configure web app
-  const webAppConfig = await createWebApp(projectId);
+  const webAppConfig = await createWebApp(projectId, fastMode || isConfigDriven);
 
   logger.success('Firebase setup completed!');
   logger.newLine();
@@ -360,7 +391,7 @@ async function selectExistingProject(suggestedName?: string): Promise<string> {
   }
 }
 
-async function setupFirebaseAuth(projectId: string): Promise<void> {
+async function setupFirebaseAuth(projectId: string, forceSetupGoogleSignIn?: boolean): Promise<void> {
   logger.info('Setting up Firebase Authentication...');
   logger.newLine();
 
@@ -368,14 +399,20 @@ async function setupFirebaseAuth(projectId: string): Promise<void> {
   console.log(chalk.gray('We recommend setting up Google Sign-In as it\'s the most popular option.'));
   logger.newLine();
 
-  const { setupGoogleAuth } = await inquirer.prompt([
-    {
-      type: 'confirm',
-      name: 'setupGoogleAuth',
-      message: 'Would you like to set up Google Sign-In now?',
-      default: true
-    }
-  ]);
+  let setupGoogleAuth: boolean;
+  if (forceSetupGoogleSignIn !== undefined) {
+    setupGoogleAuth = forceSetupGoogleSignIn;
+  } else {
+    const response = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'setupGoogleAuth',
+        message: 'Would you like to set up Google Sign-In now?',
+        default: true
+      }
+    ]);
+    setupGoogleAuth = response.setupGoogleAuth;
+  }
 
   if (!setupGoogleAuth) {
     logger.newLine();
@@ -414,14 +451,19 @@ async function setupFirebaseAuth(projectId: string): Promise<void> {
   console.log(chalk.yellow('⏳ Take your time to complete the setup in the browser...'));
   logger.newLine();
 
-  const { completed } = await inquirer.prompt([
-    {
-      type: 'confirm',
-      name: 'completed',
-      message: 'Have you completed the Google Sign-In setup in Firebase Console?',
-      default: true // Default to 'yes' since they chose to set it up
-    }
-  ]);
+  // Skip the confirmation prompt when running non-interactively (config-driven).
+  let completed = true;
+  if (forceSetupGoogleSignIn === undefined) {
+    const response = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'completed',
+        message: 'Have you completed the Google Sign-In setup in Firebase Console?',
+        default: true
+      }
+    ]);
+    completed = response.completed;
+  }
 
   if (completed) {
     logger.success('Google Sign-In setup completed! 🎉');
@@ -501,7 +543,7 @@ async function setupAnonymousAuth(projectId: string, fastMode: boolean): Promise
   logger.newLine();
 }
 
-async function createWebApp(projectId: string): Promise<Omit<FirebaseConfig, 'allowAnonymous'>> {
+async function createWebApp(projectId: string, nonInteractive = false): Promise<Omit<FirebaseConfig, 'allowAnonymous'>> {
   // First, check if there are existing web apps
   const existingApps = await getExistingWebApps(projectId);
   
@@ -510,33 +552,39 @@ async function createWebApp(projectId: string): Promise<Omit<FirebaseConfig, 'al
   if (existingApps.length > 0) {
     logger.info(`Found ${existingApps.length} existing web app(s) in this project.`);
     
-    const { action } = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'action',
-        message: 'Would you like to use an existing web app or create a new one?',
-        choices: [
-          { name: 'Use an existing web app', value: 'existing' },
-          { name: 'Create a new web app', value: 'create' }
-        ]
-      }
-    ]);
-    
-    if (action === 'existing') {
-      const { selectedAppId } = await inquirer.prompt([
+    if (nonInteractive) {
+      // In config/fast mode, use the first existing web app automatically
+      appId = existingApps[0].appId;
+      logger.info(`Using existing web app: ${existingApps[0].displayName || existingApps[0].appId}`);
+    } else {
+      const { action } = await inquirer.prompt([
         {
           type: 'list',
-          name: 'selectedAppId',
-          message: 'Select a web app:',
-          choices: existingApps.map((app: any) => ({
-            name: `${app.displayName || 'Unnamed App'} (${app.appId})`,
-            value: app.appId
-          }))
+          name: 'action',
+          message: 'Would you like to use an existing web app or create a new one?',
+          choices: [
+            { name: 'Use an existing web app', value: 'existing' },
+            { name: 'Create a new web app', value: 'create' }
+          ]
         }
       ]);
-      appId = selectedAppId;
-    } else {
-      appId = await createNewWebApp(projectId);
+      
+      if (action === 'existing') {
+        const { selectedAppId } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'selectedAppId',
+            message: 'Select a web app:',
+            choices: existingApps.map((app: any) => ({
+              name: `${app.displayName || 'Unnamed App'} (${app.appId})`,
+              value: app.appId
+            }))
+          }
+        ]);
+        appId = selectedAppId;
+      } else {
+        appId = await createNewWebApp(projectId);
+      }
     }
   } else {
     logger.info('No existing web apps found. Creating a new one...');

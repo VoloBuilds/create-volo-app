@@ -30,7 +30,7 @@ npx create-volo-app my-app --full
 - ✅ Zero sign-ins or accounts needed
 
 **Production (Optional):**
-- 🌐 Cloudflare Pages + Workers deployment ready
+- 🌐 Cloudflare Workers deployment ready (UI + API both as Workers with Static Assets)
 - 🗄️ Neon, Supabase, or custom PostgreSQL
 - 🔐 Production Firebase Auth
 
@@ -55,9 +55,10 @@ For production-ready apps:
 npx create-volo-app my-app --full
 
 # Modular: mix local and production services
-npx create-volo-app my-app --auth          # Production Firebase + local database
-npx create-volo-app my-app --database neon # Production database + local auth
-npx create-volo-app my-app --deploy        # Deployment setup + local services
+npx create-volo-app my-app --auth                  # Production Firebase + local database
+npx create-volo-app my-app --database neon         # Production database + local auth
+npx create-volo-app my-app --deploy                # Deployment setup + local services
+npx create-volo-app my-app --deploy cloudflare     # Specify deployment provider
 ```
 
 ### 🔗 Progressive Connection
@@ -67,7 +68,7 @@ Start local, connect production services later:
 npx create-volo-app my-app
 cd my-app
 
-# Connect production services when ready
+# Connect production services when ready (run from project directory)
 pnpm connect:auth           # Production Firebase Auth
 pnpm connect:database       # Choose database provider
 pnpm connect:deploy         # Cloudflare deployment
@@ -111,9 +112,21 @@ npx create-volo-app my-app --full
 # Fast mode (minimal prompts)
 npx create-volo-app my-app --full --fast
 
-# Connect to existing project
-npx create-volo-app --connect --database --path ./my-app
-npx create-volo-app --status --path ./my-app
+# Config-driven setup (non-interactive/CI)
+npx create-volo-app my-app --config ./volo-config.json
+
+# Generate a config file interactively
+npx create-volo-app --init-config
+```
+
+> **Note:** If your `volo-config.json` contains a database connection string or other secrets, add it to `.gitignore` to avoid committing credentials to version control.
+
+```bash
+
+# Connect services (run from project directory)
+npx create-volo-app --connect --auth
+npx create-volo-app --connect --database
+npx create-volo-app --connect            # show status
 ```
 
 ## Local Services
@@ -148,25 +161,25 @@ wrangler secret put FIREBASE_CLIENT_EMAIL
 # Go to Workers Dashboard > Your Worker > Settings > Variables
 ```
 
-### Frontend (Cloudflare Pages)
+### Frontend (Workers Static Assets)
 
-**Manual Setup:**
-1. Go to [Cloudflare Pages](https://dash.cloudflare.com/pages) → "Create a project"
-2. Connect your Git repository
-3. Configure build settings:
-   - **Build command**: `pnpm run build`
-   - **Output directory**: `ui/dist`
-4. Deploy automatically on Git push
+The frontend deploys as a Cloudflare Worker with static assets — the same runtime as the API. This means a single `wrangler` deploy publishes both your UI and API together, with no separate Pages project required.
 
-**Add your Pages domain to Firebase:**
+```bash
+cd ui
+pnpm run deploy
+```
+
+Under the hood this runs `wrangler deploy` which uploads the built `ui/dist` directory as Workers Static Assets.
+
+**Add your Workers domain to Firebase:**
 - Go to Firebase Console → Authentication → Settings → Authorized domains
-- Add your `*.pages.dev` domain
+- Add your `*.workers.dev` domain (or your custom domain)
 
 ### Automated Deployment
 
 For CI/CD, use GitHub Actions or similar with Cloudflare API tokens:
-- **Workers**: Use `wrangler deploy` in your pipeline
-- **Pages**: Automatic on Git push (or use Cloudflare API)
+- Run `wrangler deploy` for both the API (`server`) and UI (`ui`) in your pipeline
 
 ## Development
 
@@ -190,6 +203,17 @@ node bin/cli.js test-app
 ## Testing
 
 See [`/test`](./test) for testing tools and instructions.
+
+To smoke-test CLI and template changes against a local `volo-app` checkout:
+
+```bash
+pnpm test:volo-flow              # scaffold + verify builds
+pnpm test:volo-flow:dev          # start dev server (records pid in state)
+pnpm test:volo-flow:stop         # stop dev server
+pnpm test:volo-flow:cleanup      # remove .tmp/volo-flow-test artifacts
+```
+
+Set `VOLO_APP_TEMPLATE` to point at a non-default template path. Use `--force` to replace an existing test dir: `pnpm test:volo-flow -- --force`.
 
 ## Support
 
