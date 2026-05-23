@@ -1,0 +1,8 @@
+{
+  "$schema": "../volo-config.schema.json",
+  "projectName": "my-app",
+  "options": {
+    "skipPrereqs": true,
+    "template": "/path/to/volo-app"
+  }
+}

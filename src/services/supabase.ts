@@ -4,6 +4,8 @@ import { execa } from 'execa';
 import ora from 'ora';
 import { logger } from '../utils/logger.js';
 import { execSupabase } from '../utils/cli.js';
+import type { VoloConfig } from '../utils/config.js';
+import { resolveExistingDatabaseProject, sanitizeProjectName } from '../utils/validation.js';
 
 interface DatabaseConfig {
   url: string;
@@ -225,14 +227,27 @@ async function promptForPassword(projectRef: string, fastMode = false): Promise<
 
 // === PROJECT SELECTION ===
 
-async function selectOrCreateProject(fastMode: boolean, projectName?: string): Promise<{ project: SupabaseProject; password: string } | null> {
+async function selectOrCreateProject(
+  fastMode: boolean,
+  serviceSlug?: string,
+  configAction?: 'create' | 'existing',
+  configProjectName?: string
+): Promise<{ project: SupabaseProject; password: string } | null> {
   const projects = await listSupabaseProjects();
-  const defaultProjectName = `${projectName || 'volo-app'}-db`;
+  // For create: sanitize the name before submitting to Supabase API
+  // For existing: configProjectName is used as-is (literal lookup via resolveExistingDatabaseProject)
+  const defaultProjectName = configProjectName
+    ? sanitizeProjectName(configProjectName) || sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`)
+    : sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`);
 
-  // Fast mode or no existing projects: create new project
-  if (fastMode || projects.length === 0) {
+  const shouldCreate = configAction === 'create' || fastMode || projects.length === 0;
+  const shouldSelectExisting = configAction === 'existing' && projects.length > 0;
+
+  if (shouldCreate && !shouldSelectExisting) {
     if (projects.length === 0) {
       console.log(chalk.yellow('No existing Supabase projects found.'));
+    } else if (configAction === 'create') {
+      console.log(chalk.blue('Creating new Supabase project (from config)...'));
     } else if (fastMode) {
       console.log(chalk.blue('Creating new Supabase project (fast mode)...'));
     }
@@ -247,6 +262,19 @@ async function selectOrCreateProject(fastMode: boolean, projectName?: string): P
       project: newProject,
       password: newProject.dbPassword!
     };
+  }
+
+  if (configAction === 'existing') {
+    if (projects.length === 0) {
+      throw new Error(
+        'database.action is "existing" but no Supabase projects were found. Use action "create" or create a project in the Supabase console first.'
+      );
+    }
+
+    logger.info('Using existing Supabase project (from config)...');
+    const selected = resolveExistingDatabaseProject(projects, configProjectName, 'Supabase');
+    const password = await promptForPassword(selected.id, fastMode);
+    return { project: selected, password };
   }
 
   // Interactive mode with existing projects
@@ -276,12 +304,13 @@ async function selectOrCreateProject(fastMode: boolean, projectName?: string): P
   ]);
 
   if (selectedProject === 'new') {
+    const sanitizedDefault = sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`) || 'volo-app-db';
     const { newProjectName } = await inquirer.prompt([
       {
         type: 'input',
         name: 'newProjectName',
         message: 'Enter a name for your new Supabase project:',
-        default: defaultProjectName,
+        default: sanitizedDefault,
         validate: (input: string) => {
           if (!input.trim()) return 'Project name is required';
           if (input.length > 50) return 'Project name must be 50 characters or less';
@@ -314,31 +343,44 @@ async function selectOrCreateProject(fastMode: boolean, projectName?: string): P
 
 // === MAIN SETUP FUNCTIONS ===
 
-export async function setupSupabaseDatabase(fastMode = false, projectName?: string): Promise<DatabaseConfig> {
+export async function setupSupabaseDatabase(fastMode = false, serviceSlug?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
   logger.info('Setting up Supabase database...');
   logger.newLine();
+
+  // If config provides a connection string directly, use it (no prompt or CLI required)
+  const configuredConnString = configData?.database?.connectionString;
+  if (configuredConnString) {
+    logger.info('Using Supabase connection string from config');
+    logger.success('Supabase database configured!');
+    logger.newLine();
+    return {
+      url: configuredConnString,
+      provider: 'supabase'
+    };
+  }
 
   // Check prerequisites
   const hasSupabaseCLI = await checkSupabaseCLI();
   if (!hasSupabaseCLI) {
     logger.warning('Supabase CLI not found. Using manual setup instead.');
-    return await setupSupabaseDatabaseManual();
+    return await setupSupabaseDatabaseManual(configData);
   }
 
   const isAuthenticated = await isSupabaseAuthenticated();
   if (!isAuthenticated) {
     logger.warning('Supabase authentication failed. Using manual setup instead.');
-    return await setupSupabaseDatabaseManual();
+    return await setupSupabaseDatabaseManual(configData);
   }
 
   // Get or create project
   const spinner = ora('Loading your Supabase projects...').start();
   spinner.stop();
 
-  const result = await selectOrCreateProject(fastMode, projectName);
+  const dbConfig = configData?.database;
+  const result = await selectOrCreateProject(fastMode, serviceSlug, dbConfig?.action, dbConfig?.projectName);
   if (!result) {
     logger.warning('Failed to set up project. Using manual setup instead.');
-    return await setupSupabaseDatabaseManual();
+    return await setupSupabaseDatabaseManual(configData);
   }
 
   const { project, password } = result;
@@ -354,7 +396,12 @@ export async function setupSupabaseDatabase(fastMode = false, projectName?: stri
   };
 }
 
-async function setupSupabaseDatabaseManual(): Promise<DatabaseConfig> {
+async function setupSupabaseDatabaseManual(configData?: VoloConfig): Promise<DatabaseConfig> {
+  if (configData) {
+    throw new Error(
+      'Supabase manual setup is not available in config mode. Provide database.connectionString in volo-config.json or ensure the Supabase CLI is installed and authenticated.'
+    );
+  }
   console.log(chalk.yellow('📋 Manual setup required:'));
   console.log(chalk.gray('1. Go to: https://supabase.com/dashboard'));
   console.log(chalk.gray('2. Sign up for a free account (if you don\'t have one)'));

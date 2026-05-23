@@ -30,7 +30,7 @@ npx create-volo-app my-app --full
 - ✅ Zero sign-ins or accounts needed
 
 **Production (Optional):**
-- 🌐 Cloudflare Pages + Workers deployment ready
+- 🌐 Cloudflare Workers deployment ready (UI + API both as Workers with Static Assets)
 - 🗄️ Neon, Supabase, or custom PostgreSQL
 - 🔐 Production Firebase Auth
 
@@ -43,6 +43,8 @@ npx create-volo-app my-app
 cd my-app
 pnpm run dev
 ```
+Run **`pnpm run dev` from the project root** — this is the supported way to develop. It starts the UI, API, embedded database, and Firebase Auth emulator together and assigns ports automatically. You do not need to run `ui` and `server` separately.
+
 - **Zero authentication required**
 - **Working app in 30 seconds**
 - All services running locally
@@ -55,9 +57,10 @@ For production-ready apps:
 npx create-volo-app my-app --full
 
 # Modular: mix local and production services
-npx create-volo-app my-app --auth          # Production Firebase + local database
-npx create-volo-app my-app --database neon # Production database + local auth
-npx create-volo-app my-app --deploy        # Deployment setup + local services
+npx create-volo-app my-app --auth                  # Production Firebase + local database
+npx create-volo-app my-app --database neon         # Production database + local auth
+npx create-volo-app my-app --deploy                # Deployment setup + local services
+npx create-volo-app my-app --deploy cloudflare     # Specify deployment provider
 ```
 
 ### 🔗 Progressive Connection
@@ -67,7 +70,7 @@ Start local, connect production services later:
 npx create-volo-app my-app
 cd my-app
 
-# Connect production services when ready
+# Connect production services when ready (run from project directory)
 pnpm connect:auth           # Production Firebase Auth
 pnpm connect:database       # Choose database provider
 pnpm connect:deploy         # Cloudflare deployment
@@ -111,62 +114,99 @@ npx create-volo-app my-app --full
 # Fast mode (minimal prompts)
 npx create-volo-app my-app --full --fast
 
-# Connect to existing project
-npx create-volo-app --connect --database --path ./my-app
-npx create-volo-app --status --path ./my-app
+# Config-driven setup (non-interactive/CI)
+npx create-volo-app my-app --config ./volo-config.json
+
+# Generate a config file interactively
+npx create-volo-app --init-config
+```
+
+## Upgrading from older CLI flags
+
+These flags were removed; Commander no longer accepts them. If a script still passes one, the CLI exits with a migration hint.
+
+| Removed | Use instead |
+| ------- | ----------- |
+| `--status --path ./app` | `cd ./app` then `npx create-volo-app --connect` |
+| `--path <dir>` | `cd` into the project (connect mode uses cwd) |
+| `--branch dev` | `--template <url>#dev` |
+| `--db neon` | `--database neon` |
+| `--skip-prereqs` | `"options": { "skipPrereqs": true }` in config |
+| `--install-deps` | `--fast` or `--config` |
+| `--local-template <path>` | `--template <path>` |
+| `--non-interactive` | `--fast` or `--config ./volo-config.json` |
+| `--no-start` | Run `pnpm run dev` after scaffolding |
+
+## Config file (`volo-config.json`)
+
+Use a config file for **non-interactive** or **CI** scaffolding. Pass it explicitly with `--config ./volo-config.json` (a file in the current directory is **not** loaded automatically).
+
+**Do not commit your real config.** Treat `volo-config.json` like `.env`: it often holds database URLs and other secrets. Generated projects include `volo-config.json` in `.gitignore` by default. Safe, committed samples live under [`examples/`](examples/) — copy and edit those locally, or run `--init-config` to generate a new file.
+
+**Examples:** `examples/volo-config.local.json` uses `"template": "/path/to/volo-app"` as a placeholder — set `options.template` to your local volo-app checkout before use. `pnpm test:volo-flow` ignores that value and passes `--template` (default `../volo-app`, or set `VOLO_APP_TEMPLATE`).
+
+**CI:** Build the config in the job (env vars, secret manager, or a short script), run `create-volo-app` with `--config`, and do not persist the file as a repo artifact unless your pipeline stores secrets securely.
+
+**Overwrite:** Config mode refuses to replace an existing project directory unless you set `"options": { "overwrite": true }`.
+
+**Naming:** The CLI path / folder name can be any valid directory name (spaces, underscores, etc.). When auto-creating cloud resources (Cloudflare worker names, Neon/Supabase project names, Firebase project IDs), the CLI derives a lowercase-hyphen slug from the basename and sanitizes it for each provider. Lookup of `database.action: "existing"` projects uses the literal `projectName` value from config — no sanitization — so it matches the exact cloud project name or ID you specify.
+
+```bash
+
+# Connect services (run from project directory)
+npx create-volo-app --connect --auth
+npx create-volo-app --connect --database
+npx create-volo-app --connect            # show status
 ```
 
 ## Local Services
+
+Start everything with **`pnpm run dev` from the project root**. Avoid running `ui` and `server` in separate terminals unless you have a specific reason.
 
 Your local development environment includes:
 
 - **Database**: Embedded PostgreSQL at `./data/postgres`
 - **Auth**: Firebase emulator with demo users
-- **Frontend**: `http://localhost:5173`
-- **API**: `http://localhost:8787`
+- **Frontend**: `http://localhost:5501` (5500-block; root `pnpm run dev` assigns ports automatically)
+- **API**: `http://localhost:5500`
 
-All data persists locally between development sessions in the `data` folder within your project
+All data persists locally between development sessions in the `data` folder within your project.
+
+**After Cloudflare deploy is connected** (`pnpm connect:deploy` or scaffold with `--deploy`), root `pnpm run dev` switches to **Wrangler dev** and does **not** start embedded PostgreSQL. To keep using the local embedded database, run **`pnpm dev:node`** instead (added to the project when deploy is connected).
+
+**Advanced:** If you run the UI and API separately, set `VITE_API_URL` in `ui/.env.local` to point at your API (for example `http://localhost:5500`). The root dev script handles this for you.
 
 ## Production Deployment
 
-### Backend (Cloudflare Workers)
+From the project root (after `pnpm connect:deploy` or scaffolding with `--deploy`):
+
+**Local dev after deploy connect:** `pnpm run dev` auto-detects Wrangler (Workers runtime) and expects a remote `DATABASE_URL` — embedded PostgreSQL is not started. Use **`pnpm dev:node`** for Node.js dev with the embedded database.
+
 ```bash
-cd server
 pnpm run deploy
 ```
 
-**Set production environment variables** (use `wrangler` for easier management):
+This deploys the API Worker first, detects the Worker URL, writes `ui/.env.production`, then deploys the UI static assets Worker. The UI deploys as a separate Cloudflare Worker; under the hood that step runs `pnpm run build && wrangler deploy`, uploading `ui/dist` as Workers Static Assets.
+
+**Add your Workers domain to Firebase:**
+- Go to Firebase Console → Authentication → Settings → Authorized domains
+- Add your `*.workers.dev` domain (or your custom domain)
+
+### Backend secrets (Cloudflare Workers)
+
+For production hardening, prefer Wrangler secrets over plain `[vars]` in `server/wrangler.toml`:
+
 ```bash
-# Recommended: Use wrangler CLI
 cd server
 wrangler secret put DATABASE_URL
-wrangler secret put FIREBASE_PROJECT_ID  
-wrangler secret put FIREBASE_PRIVATE_KEY
-wrangler secret put FIREBASE_CLIENT_EMAIL
-
-# Alternative: Set in Cloudflare dashboard
-# Go to Workers Dashboard > Your Worker > Settings > Variables
 ```
 
-### Frontend (Cloudflare Pages)
-
-**Manual Setup:**
-1. Go to [Cloudflare Pages](https://dash.cloudflare.com/pages) → "Create a project"
-2. Connect your Git repository
-3. Configure build settings:
-   - **Build command**: `pnpm run build`
-   - **Output directory**: `ui/dist`
-4. Deploy automatically on Git push
-
-**Add your Pages domain to Firebase:**
-- Go to Firebase Console → Authentication → Settings → Authorized domains
-- Add your `*.pages.dev` domain
+You can also set variables in the Cloudflare dashboard under Workers → your Worker → Settings → Variables.
 
 ### Automated Deployment
 
 For CI/CD, use GitHub Actions or similar with Cloudflare API tokens:
-- **Workers**: Use `wrangler deploy` in your pipeline
-- **Pages**: Automatic on Git push (or use Cloudflare API)
+- Run `wrangler deploy` for both the API (`server`) and UI (`ui`) in your pipeline
 
 ## Development
 
@@ -190,6 +230,19 @@ node bin/cli.js test-app
 ## Testing
 
 See [`/test`](./test) for testing tools and instructions.
+
+To smoke-test CLI and template changes against a local `volo-app` checkout:
+
+```bash
+pnpm test:volo-flow              # scaffold + verify builds
+pnpm test:volo-flow:dev          # start dev server (records pid in state)
+pnpm test:volo-flow:stop         # stop dev server
+pnpm test:volo-flow:cleanup      # remove .tmp/volo-flow-test artifacts
+```
+
+Set `VOLO_APP_TEMPLATE` to point at a non-default template path. Use `--force` to replace an existing test dir: `pnpm test:volo-flow -- --force`.
+
+**Dev log contract:** `test:volo-flow:dev` waits for `VOLO_DEV_FRONTEND_URL` and `VOLO_DEV_BACKEND_URL`, verifies backend health, and captures service logs to `.tmp/volo-flow-test.dev.log`. On failure it prints a log excerpt. If you change those lines in volo-app `scripts/run-dev.js`, update `scripts/test-volo-flow.mjs` here.
 
 ## Support
 

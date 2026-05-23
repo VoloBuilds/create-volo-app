@@ -2,8 +2,9 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
 import { logger } from '../utils/logger.js';
-import { validateFirebaseProjectId } from '../utils/validation.js';
+import { validateFirebaseProjectId, sanitizeFirebaseProjectId } from '../utils/validation.js';
 import { execFirebase } from '../utils/cli.js';
+import type { VoloConfig } from '../utils/config.js';
 
 // Custom error for Firebase project ID conflicts
 export class FirebaseProjectIdConflictError extends Error {
@@ -70,7 +71,7 @@ async function checkFirebaseFirstTimeSetup(): Promise<boolean> {
   }
 }
 
-export async function setupFirebase(fastMode = false, projectName?: string): Promise<FirebaseConfig> {
+export async function setupFirebase(fastMode = false, serviceSlug?: string, displayName?: string, configData?: VoloConfig): Promise<FirebaseConfig> {
   logger.newLine();
   console.log(chalk.yellow.bold('🔐 Setting up Firebase Authentication'));
   console.log(chalk.white('Firebase handles secure user login/signup for your app.'));
@@ -91,11 +92,29 @@ export async function setupFirebase(fastMode = false, projectName?: string): Pro
     throw new FirebaseFirstTimeSetupError();
   }
 
+  const authConfig = configData?.auth;
+  const isConfigDriven = !!authConfig;
+
   let projectId: string;
 
-  if (fastMode) {
-    // In fast mode, always create a new project with project name
-    projectId = await createFirebaseProjectFast(projectName || 'volo-app');
+  if (isConfigDriven) {
+    // Config-driven: skip the create/existing prompt
+    if (authConfig.action === 'existing') {
+      if (authConfig.projectId) {
+        projectId = authConfig.projectId;
+        logger.info(`Using existing Firebase project from config: ${projectId}`);
+      } else {
+        // Schema requires projectId when action is 'existing'; defensive fallback
+        projectId = await selectExistingProject(serviceSlug);
+      }
+    } else {
+      // action === 'create': use serviceSlug for ID, displayName for human label
+      const humanName = authConfig.displayName || displayName || serviceSlug || 'volo-app';
+      projectId = await createFirebaseProjectFast(serviceSlug || 'volo-app', humanName);
+    }
+  } else if (fastMode) {
+    // In fast mode, always create a new project with service slug
+    projectId = await createFirebaseProjectFast(serviceSlug || 'volo-app', displayName || serviceSlug || 'volo-app');
   } else {
     // Choose between creating new project or using existing
     const { action } = await inquirer.prompt([
@@ -111,28 +130,39 @@ export async function setupFirebase(fastMode = false, projectName?: string): Pro
     ]);
 
     if (action === 'create') {
-      projectId = await createFirebaseProject(projectName);
+      projectId = await createFirebaseProject(serviceSlug, displayName);
     } else {
-      projectId = await selectExistingProject(projectName);
+      projectId = await selectExistingProject(serviceSlug);
     }
   }
 
-  // Set up authentication (skip Google Sign-In in fast mode)
-  if (!fastMode) {
+  // Set up authentication (skip Google Sign-In in fast mode or when config opts out)
+  if (isConfigDriven) {
+    // Use the config value for setupGoogleSignIn (default true per schema)
+    const shouldSetupGoogleSignIn = authConfig.setupGoogleSignIn !== false;
+    if (shouldSetupGoogleSignIn) {
+      await setupFirebaseAuth(projectId, true);
+    } else {
+      logger.info('Skipping Google Sign-In setup (per config).');
+    }
+  } else if (!fastMode) {
     await setupFirebaseAuth(projectId);
   }
 
   // Ask about anonymous user access
   let allowAnonymous: boolean;
-  if (fastMode) {
-    // In fast mode, default to allowing anonymous users
+  if (isConfigDriven && authConfig.allowAnonymous !== undefined) {
+    allowAnonymous = authConfig.allowAnonymous;
+    logger.info(`Anonymous users ${allowAnonymous ? 'allowed' : 'disabled'} (per config).`);
+  } else if (fastMode || isConfigDriven) {
+    // In fast mode (or config without explicit allowAnonymous), default to allowing anonymous users
     allowAnonymous = true;
   } else {
     logger.newLine();
     console.log(chalk.gray('When enabled, users can explore your app immediately without authentication.'));
     console.log(chalk.gray('They can sign in later to associate their account with a permanent login.'));
     logger.newLine();
-    
+
     const { allowAnonymousAnswer } = await inquirer.prompt([
       {
         type: 'confirm',
@@ -145,12 +175,19 @@ export async function setupFirebase(fastMode = false, projectName?: string): Pro
   }
 
   // If anonymous auth is enabled, guide user to enable it in Firebase Console
+  // Treat config-driven runs like fastMode here so we don't block on confirmation prompts.
   if (allowAnonymous) {
-    await setupAnonymousAuth(projectId, fastMode);
+    await setupAnonymousAuth(projectId, fastMode || isConfigDriven);
   }
 
   // Create and configure web app
-  const webAppConfig = await createWebApp(projectId);
+  const webAppDisplayName =
+    authConfig?.displayName || displayName || serviceSlug || 'volo-app';
+  const webAppConfig = await createWebApp(
+    projectId,
+    fastMode || isConfigDriven,
+    webAppDisplayName
+  );
 
   logger.success('Firebase setup completed!');
   logger.newLine();
@@ -161,18 +198,17 @@ export async function setupFirebase(fastMode = false, projectName?: string): Pro
   };
 }
 
-async function createFirebaseProjectFast(baseProjectName: string): Promise<string> {
-  // Sanitize project name for Firebase (lowercase, hyphens only)
-  const sanitizedName = baseProjectName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/--+/g, '-').replace(/^-|-$/g, '');
+async function createFirebaseProjectFast(serviceSlug: string, displayName: string): Promise<string> {
+  const sanitizedName = sanitizeFirebaseProjectId(serviceSlug);
   let projectId = sanitizedName;
-  let displayName = baseProjectName;
+  let currentDisplayName = displayName;
   let attempt = 0;
 
   while (attempt < 10) { // Limit attempts to avoid infinite loop
     const spinner = ora(`Creating Firebase project "${projectId}"...`).start();
 
     try {
-      await execFirebase(['projects:create', projectId, '--display-name', displayName]);
+      await execFirebase(['projects:create', projectId, '--display-name', currentDisplayName]);
       spinner.succeed(`Firebase project "${projectId}" created successfully`);
       return projectId;
     } catch (error) {
@@ -186,7 +222,7 @@ async function createFirebaseProjectFast(baseProjectName: string): Promise<strin
       )) {
         attempt++;
         projectId = `${sanitizedName}-${attempt}`;
-        displayName = `${baseProjectName} ${attempt}`;
+        currentDisplayName = `${displayName} ${attempt}`;
         logger.debug(`Project ID "${sanitizedName}" exists, trying "${projectId}"`);
         continue;
       }
@@ -225,10 +261,10 @@ async function createFirebaseProjectFast(baseProjectName: string): Promise<strin
   throw new Error('Failed to create Firebase project after multiple attempts');
 }
 
-async function createFirebaseProject(suggestedName?: string): Promise<string> {
-  // Generate a default project ID suggestion
-  const defaultProjectId = suggestedName 
-    ? suggestedName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/--+/g, '-').replace(/^-|-$/g, '')
+async function createFirebaseProject(serviceSlug?: string, displayName?: string): Promise<string> {
+  // Generate a default project ID suggestion from the service slug
+  const defaultProjectId = serviceSlug
+    ? sanitizeFirebaseProjectId(serviceSlug)
     : 'my-volo-app';
 
   const { projectId } = await inquirer.prompt([
@@ -249,21 +285,21 @@ async function createFirebaseProject(suggestedName?: string): Promise<string> {
     }
   ]);
 
-  const { displayName } = await inquirer.prompt([
+  const { chosenDisplayName } = await inquirer.prompt([
     {
       type: 'input',
-      name: 'displayName',
+      name: 'chosenDisplayName',
       message: 'Enter a display name for your project:',
-      default: projectId
+      default: displayName || projectId
     }
   ]);
 
   try {
-    return await attemptFirebaseProjectCreation(projectId, displayName);
+    return await attemptFirebaseProjectCreation(projectId, chosenDisplayName);
   } catch (error) {
     // If it's a project ID conflict, ask for a new project ID
     if (error instanceof FirebaseProjectIdConflictError) {
-      return await createFirebaseProject(suggestedName);
+      return await createFirebaseProject(serviceSlug, displayName);
     }
     
     // For Terms of Service errors, bubble them up to the retry logic
@@ -360,7 +396,7 @@ async function selectExistingProject(suggestedName?: string): Promise<string> {
   }
 }
 
-async function setupFirebaseAuth(projectId: string): Promise<void> {
+async function setupFirebaseAuth(projectId: string, forceSetupGoogleSignIn?: boolean): Promise<void> {
   logger.info('Setting up Firebase Authentication...');
   logger.newLine();
 
@@ -368,14 +404,20 @@ async function setupFirebaseAuth(projectId: string): Promise<void> {
   console.log(chalk.gray('We recommend setting up Google Sign-In as it\'s the most popular option.'));
   logger.newLine();
 
-  const { setupGoogleAuth } = await inquirer.prompt([
-    {
-      type: 'confirm',
-      name: 'setupGoogleAuth',
-      message: 'Would you like to set up Google Sign-In now?',
-      default: true
-    }
-  ]);
+  let setupGoogleAuth: boolean;
+  if (forceSetupGoogleSignIn !== undefined) {
+    setupGoogleAuth = forceSetupGoogleSignIn;
+  } else {
+    const response = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'setupGoogleAuth',
+        message: 'Would you like to set up Google Sign-In now?',
+        default: true
+      }
+    ]);
+    setupGoogleAuth = response.setupGoogleAuth;
+  }
 
   if (!setupGoogleAuth) {
     logger.newLine();
@@ -414,14 +456,19 @@ async function setupFirebaseAuth(projectId: string): Promise<void> {
   console.log(chalk.yellow('⏳ Take your time to complete the setup in the browser...'));
   logger.newLine();
 
-  const { completed } = await inquirer.prompt([
-    {
-      type: 'confirm',
-      name: 'completed',
-      message: 'Have you completed the Google Sign-In setup in Firebase Console?',
-      default: true // Default to 'yes' since they chose to set it up
-    }
-  ]);
+  // Skip the confirmation prompt when running non-interactively (config-driven).
+  let completed = true;
+  if (forceSetupGoogleSignIn === undefined) {
+    const response = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'completed',
+        message: 'Have you completed the Google Sign-In setup in Firebase Console?',
+        default: true
+      }
+    ]);
+    completed = response.completed;
+  }
 
   if (completed) {
     logger.success('Google Sign-In setup completed! 🎉');
@@ -501,7 +548,11 @@ async function setupAnonymousAuth(projectId: string, fastMode: boolean): Promise
   logger.newLine();
 }
 
-async function createWebApp(projectId: string): Promise<Omit<FirebaseConfig, 'allowAnonymous'>> {
+async function createWebApp(
+  projectId: string,
+  nonInteractive = false,
+  webAppDisplayName = 'volo-app'
+): Promise<Omit<FirebaseConfig, 'allowAnonymous'>> {
   // First, check if there are existing web apps
   const existingApps = await getExistingWebApps(projectId);
   
@@ -510,37 +561,43 @@ async function createWebApp(projectId: string): Promise<Omit<FirebaseConfig, 'al
   if (existingApps.length > 0) {
     logger.info(`Found ${existingApps.length} existing web app(s) in this project.`);
     
-    const { action } = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'action',
-        message: 'Would you like to use an existing web app or create a new one?',
-        choices: [
-          { name: 'Use an existing web app', value: 'existing' },
-          { name: 'Create a new web app', value: 'create' }
-        ]
-      }
-    ]);
-    
-    if (action === 'existing') {
-      const { selectedAppId } = await inquirer.prompt([
+    if (nonInteractive) {
+      // In config/fast mode, use the first existing web app automatically
+      appId = existingApps[0].appId;
+      logger.info(`Using existing web app: ${existingApps[0].displayName || existingApps[0].appId}`);
+    } else {
+      const { action } = await inquirer.prompt([
         {
           type: 'list',
-          name: 'selectedAppId',
-          message: 'Select a web app:',
-          choices: existingApps.map((app: any) => ({
-            name: `${app.displayName || 'Unnamed App'} (${app.appId})`,
-            value: app.appId
-          }))
+          name: 'action',
+          message: 'Would you like to use an existing web app or create a new one?',
+          choices: [
+            { name: 'Use an existing web app', value: 'existing' },
+            { name: 'Create a new web app', value: 'create' }
+          ]
         }
       ]);
-      appId = selectedAppId;
-    } else {
-      appId = await createNewWebApp(projectId);
+      
+      if (action === 'existing') {
+        const { selectedAppId } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'selectedAppId',
+            message: 'Select a web app:',
+            choices: existingApps.map((app: any) => ({
+              name: `${app.displayName || 'Unnamed App'} (${app.appId})`,
+              value: app.appId
+            }))
+          }
+        ]);
+        appId = selectedAppId;
+      } else {
+        appId = await createNewWebApp(projectId, webAppDisplayName);
+      }
     }
   } else {
     logger.info('No existing web apps found. Creating a new one...');
-    appId = await createNewWebApp(projectId);
+    appId = await createNewWebApp(projectId, webAppDisplayName);
   }
   
   // Get app configuration
@@ -558,7 +615,7 @@ async function getExistingWebApps(projectId: string): Promise<any[]> {
   }
 }
 
-async function createNewWebApp(projectId: string): Promise<string> {
+async function createNewWebApp(projectId: string, webAppDisplayName = 'volo-app'): Promise<string> {
   const spinner = ora('Creating Firebase web app...').start();
   
   try {
@@ -566,7 +623,7 @@ async function createNewWebApp(projectId: string): Promise<string> {
     const { stdout } = await execFirebase([
       'apps:create', 
       'WEB', 
-      'volo-app',
+      webAppDisplayName,
       '--project', projectId
     ]);
     

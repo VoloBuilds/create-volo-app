@@ -1,0 +1,149 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VoLo Config",
+  "description": "Configuration file for create-volo-app non-interactive/CI setup",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for IDE autocomplete"
+    },
+    "projectName": {
+      "type": "string",
+      "description": "Name of the project to create"
+    },
+    "auth": {
+      "type": "object",
+      "description": "Firebase Authentication configuration. Presence implies --auth flag.",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["create", "existing"],
+          "description": "Whether to create a new Firebase project or use an existing one"
+        },
+        "projectId": {
+          "type": "string",
+          "description": "Firebase project ID (required when action is 'existing')"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name for the Firebase project (used when creating)"
+        },
+        "allowAnonymous": {
+          "type": "boolean",
+          "description": "Allow anonymous users to access the app before signing in",
+          "default": false
+        },
+        "setupGoogleSignIn": {
+          "type": "boolean",
+          "description": "Whether to set up Google Sign-In",
+          "default": true
+        }
+      },
+      "if": {
+        "properties": { "action": { "const": "existing" } }
+      },
+      "then": {
+        "required": ["action", "projectId"]
+      }
+    },
+    "database": {
+      "type": "object",
+      "description": "Database configuration. Presence implies --database flag.",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["neon", "supabase", "other"],
+          "description": "Database provider"
+        },
+        "action": {
+          "type": "string",
+          "enum": ["create", "existing"],
+          "description": "Whether to create a new database project or use an existing one"
+        },
+        "projectName": {
+          "type": "string",
+          "description": "Database project name or ID (required when action is 'existing' for neon/supabase; used as name when creating)"
+        },
+        "connectionString": {
+          "type": "string",
+          "description": "PostgreSQL connection string (required when action is 'existing' and provider is 'other')"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": { "const": "existing" },
+              "provider": { "const": "other" }
+            },
+            "required": ["action", "provider"]
+          },
+          "then": {
+            "required": ["provider", "action", "connectionString"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": { "const": "existing" },
+              "provider": { "enum": ["neon", "supabase"] }
+            },
+            "required": ["action", "provider"]
+          },
+          "then": {
+            "required": ["provider", "action", "projectName"]
+          }
+        }
+      ]
+    },
+    "deploy": {
+      "type": "object",
+      "description": "Deployment configuration. Presence implies --deploy flag.",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["cloudflare"],
+          "description": "Deployment provider",
+          "default": "cloudflare"
+        },
+        "workerName": {
+          "type": "string",
+          "description": "Name for the Cloudflare Worker"
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "description": "Additional options",
+      "additionalProperties": false,
+      "properties": {
+        "skipPrereqs": {
+          "type": "boolean",
+          "description": "Skip prerequisite checks",
+          "default": false
+        },
+        "verbose": {
+          "type": "boolean",
+          "description": "Enable verbose logging",
+          "default": false
+        },
+        "template": {
+          "type": "string",
+          "description": "Custom template (GitHub URL or local path; append #branch for branch)"
+        },
+        "overwrite": {
+          "type": "boolean",
+          "description": "Allow replacing an existing project directory when using --config. Defaults to false.",
+          "default": false
+        }
+      }
+    }
+  }
+}

@@ -1,19 +1,21 @@
+import type { VoloConfig } from '../../utils/config.js';
+
 export interface CreateOptions {
   template: string;
-  branch?: string;
-  db?: string;
   fast?: boolean;
-  skipPrereqs: boolean;
   verbose: boolean;
-  databasePreference?: string;
   full?: boolean;
   auth?: boolean | string;
   database?: boolean | string;
-  deploy?: boolean;
+  deploy?: boolean | string;
+  config?: string;
+  initConfig?: boolean;
+  configData?: VoloConfig;
 }
 
 export interface ProjectConfig {
   name: string;
+  serviceSlug: string;
   directory: string;
   firebase: {
     projectId: string;

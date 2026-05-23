@@ -4,9 +4,8 @@ import { readFile, writeFile } from 'fs/promises';
 import path from 'path';
 import inquirer from 'inquirer';
 import { setupDatabaseWithRetry } from '../shared/serviceSetup.js';
-import { setupSupabaseDatabase } from '../../services/supabase.js';
 import { 
-  getProjectNameFromPackageJson,
+  getProjectNameAndSlugFromPackageJson,
   sanitizeConnectionString
 } from './shared.js';
 import { logger } from '../../utils/logger.js';
@@ -83,18 +82,18 @@ export async function connectDatabase(projectPath: string, provider?: string): P
       selectedProvider = await promptDatabaseProvider();
     }
     
-    // Get project name from package.json for consistent naming
-    const projectName = await getProjectNameFromPackageJson(projectPath);
+    // Get service slug from package.json for cloud resource naming
+    const { serviceSlug } = await getProjectNameAndSlugFromPackageJson(projectPath);
     
     console.log(chalk.blue(`\n🔐 Setting up ${selectedProvider} database...`));
     
     let databaseResult;
     switch (selectedProvider) {
       case 'neon':
-        databaseResult = await setupDatabaseWithRetry('neon', undefined, false, projectName);
+        databaseResult = await setupDatabaseWithRetry('neon', 2, false, serviceSlug);
         break;
       case 'supabase':
-        databaseResult = await setupSupabaseDatabase();
+        databaseResult = await setupDatabaseWithRetry('supabase', 2, false, serviceSlug);
         break;
       case 'custom':
         databaseResult = await promptCustomDatabase();

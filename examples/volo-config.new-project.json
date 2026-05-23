@@ -1,0 +1,17 @@
+{
+  "$schema": "../volo-config.schema.json",
+  "projectName": "my-new-app",
+  "auth": {
+    "action": "create",
+    "allowAnonymous": false,
+    "setupGoogleSignIn": true
+  },
+  "database": {
+    "provider": "neon",
+    "action": "create",
+    "projectName": "my-new-app-db"
+  },
+  "deploy": {
+    "workerName": "my-new-app-api"
+  }
+}

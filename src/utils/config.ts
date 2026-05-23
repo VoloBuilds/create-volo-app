@@ -1,158 +1,399 @@
 import fs from 'fs-extra';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+import inquirer from 'inquirer';
+import Ajv from 'ajv';
 import { logger } from './logger.js';
-import { validateUrl } from './validation.js';
+import { deriveServiceSlug } from './validation.js';
 
-interface ProjectConfig {
-  name: string;
-  directory: string;
-  firebase: {
-    projectId: string;
-    apiKey: string;
-    messagingSenderId: string;
-    appId: string;
-    measurementId: string;
+const require = createRequire(import.meta.url);
+const { version: packageVersion } = require('../../package.json') as { version: string };
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export function getPublishedConfigSchemaUrl(version: string = packageVersion): string {
+  return `https://raw.githubusercontent.com/VoloBuilds/create-volo-app/v${version}/volo-config.schema.json`;
+}
+
+export interface VoloConfig {
+  $schema?: string;
+  projectName?: string;
+
+  auth?: {
+    action: 'create' | 'existing';
+    projectId?: string;
+    displayName?: string;
+    allowAnonymous?: boolean;
+    setupGoogleSignIn?: boolean;
   };
-  database: {
-    url: string;
+
+  database?: {
     provider: 'neon' | 'supabase' | 'other';
+    action?: 'create' | 'existing';
+    projectName?: string;
+    connectionString?: string;
   };
-  cloudflare: {
-    workerName: string;
+
+  deploy?: {
+    provider?: 'cloudflare';
+    workerName?: string;
+  };
+
+  options?: {
+    skipPrereqs?: boolean;
+    verbose?: boolean;
+    template?: string;
+    /** When true, replace an existing target directory in config mode. Defaults to false. */
+    overwrite?: boolean;
   };
 }
 
-function validateReplacementValue(key: string, value: string): boolean {
-  // Validate based on the type of configuration
-  switch (key) {
-    case '{{DATABASE_URL}}':
-      return validateUrl(value);
-    case '{{WORKER_NAME}}':
-      return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(value) && value.length <= 63;
-    case '{{FIREBASE_PROJECT_ID}}':
-      return /^[a-z][a-z0-9-]*[a-z0-9]$/.test(value) && value.length >= 6 && value.length <= 30;
-    default:
-      return true;
+let cachedValidate: ReturnType<Ajv['compile']> | null = null;
+
+function getSchemaValidator(): ReturnType<Ajv['compile']> | null {
+  if (cachedValidate !== null) return cachedValidate;
+
+  // Resolve schema relative to the package root (two levels up from dist/utils/)
+  const schemaPath = path.resolve(__dirname, '..', '..', 'volo-config.schema.json');
+  if (!fs.existsSync(schemaPath)) {
+    logger.debug(`Schema file not found at ${schemaPath}, skipping schema validation`);
+    return null;
+  }
+
+  try {
+    const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
+    const ajv = new Ajv({ allErrors: true });
+    cachedValidate = ajv.compile(schema);
+    return cachedValidate;
+  } catch (error) {
+    logger.debug(`Failed to compile config schema: ${error}`);
+    return null;
   }
 }
 
-export async function generateConfigFiles(config: ProjectConfig): Promise<void> {
-  const { directory, firebase, database, cloudflare } = config;
+function formatValidationErrors(errors: NonNullable<ReturnType<Ajv['compile']>['errors']>): string {
+  return errors
+    .map(err => {
+      const field = err.instancePath || '(root)';
+      if (err.keyword === 'additionalProperties') {
+        return `${field}: unknown property "${(err.params as any).additionalProperty}"`;
+      }
+      return `${field}: ${err.message}`;
+    })
+    .join('\n  ');
+}
 
-  // Define placeholder replacements - simplified for JWKS approach
-  const replacements = {
-    '{{WORKER_NAME}}': cloudflare.workerName,
-    '{{FIREBASE_PROJECT_ID}}': firebase.projectId,
-    '{{DATABASE_URL}}': database.url
+export function loadConfig(configPath: string): VoloConfig {
+  const resolvedPath = path.resolve(configPath);
+
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`Config file not found: ${resolvedPath}`);
+  }
+
+  let config: VoloConfig;
+  try {
+    const content = fs.readFileSync(resolvedPath, 'utf-8');
+    config = JSON.parse(content) as VoloConfig;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`Invalid JSON in config file: ${resolvedPath}`);
+    }
+    throw error;
+  }
+
+  const validate = getSchemaValidator();
+  if (validate && !validate(config)) {
+    const details = formatValidationErrors(validate.errors!);
+    throw new Error(`Invalid config file (${resolvedPath}):\n  ${details}`);
+  }
+
+  return config;
+}
+
+export function validateConfigForNonInteractive(config: VoloConfig): void {
+  if (!config.projectName?.trim()) {
+    throw new Error(
+      'volo-config.json must include "projectName" for non-interactive setup.'
+    );
+  }
+
+  if (config.database && !config.database.action) {
+    throw new Error(
+      'volo-config.json must include database.action ("create" or "existing") when database is configured.'
+    );
+  }
+}
+
+interface CreateOptionsLike {
+  template?: string;
+  fast?: boolean;
+  verbose?: boolean;
+  full?: boolean;
+  auth?: boolean | string;
+  database?: boolean | string;
+  deploy?: boolean | string;
+  config?: string;
+  initConfig?: boolean;
+  configData?: VoloConfig;
+}
+
+export interface MergeConfigOptions {
+  /** True when the user passed `--template` on the CLI (not the post-merge default). */
+  templateFromCli?: boolean;
+}
+
+export function mergeConfigWithOptions(
+  config: VoloConfig,
+  cliOptions: CreateOptionsLike,
+  mergeOptions?: MergeConfigOptions
+): CreateOptionsLike {
+  const merged = { ...cliOptions };
+
+  // Config values are used only when CLI flags are not explicitly set
+
+  // Template: explicit CLI --template wins; otherwise use config.options.template
+  if (config.options?.template && !mergeOptions?.templateFromCli) {
+    merged.template = config.options.template;
+  }
+
+  // Verbose
+  if (config.options?.verbose && !cliOptions.verbose) {
+    merged.verbose = true;
+  }
+
+  // Auth: presence of config.auth implies --auth
+  if (config.auth && cliOptions.auth === undefined) {
+    merged.auth = true;
+  }
+
+  // Database: presence of config.database implies --database with provider
+  if (config.database && cliOptions.database === undefined) {
+    merged.database = config.database.provider;
+  }
+
+  // Deploy: presence of config.deploy implies --deploy with provider
+  if (config.deploy && cliOptions.deploy === undefined) {
+    merged.deploy = config.deploy.provider || 'cloudflare';
+  }
+
+  // Store the config data for downstream use
+  merged.configData = config;
+
+  return merged;
+}
+
+export async function generateConfigInteractively(): Promise<void> {
+  console.log('');
+  logger.step('Generating volo-config.json...');
+  console.log('');
+
+  const config: VoloConfig = {
+    $schema: getPublishedConfigSchemaUrl(),
   };
 
-  // Validate replacement values
-  for (const [key, value] of Object.entries(replacements)) {
-    if (!validateReplacementValue(key, value)) {
-      logger.warning(`Invalid value for ${key}: ${value}`);
-      logger.debug(`Validation failed for ${key}, but continuing with generation`);
+  // Project name
+  const { projectName } = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'projectName',
+      message: 'What will your project be called?',
+      default: 'my-volo-app',
+      validate: (input: string) => input.trim() ? true : 'Project name is required'
+    }
+  ]);
+  config.projectName = projectName;
+  const serviceSlug = deriveServiceSlug(projectName);
+
+  // Auth setup
+  const { setupAuth } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'setupAuth',
+      message: 'Set up production authentication (Firebase)?',
+      default: false
+    }
+  ]);
+
+  if (setupAuth) {
+    const { authAction } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'authAction',
+        message: 'Create a new Firebase project or use an existing one?',
+        choices: [
+          { name: 'Create a new Firebase project', value: 'create' },
+          { name: 'Use an existing Firebase project', value: 'existing' }
+        ]
+      }
+    ]);
+
+    config.auth = { action: authAction };
+
+    if (authAction === 'existing') {
+      const { projectId } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'projectId',
+          message: 'Enter your Firebase project ID:',
+          validate: (input: string) => input.trim() ? true : 'Project ID is required'
+        }
+      ]);
+      config.auth.projectId = projectId;
+    }
+
+    const { setupGoogleSignIn } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'setupGoogleSignIn',
+        message: 'Set up Google Sign-In?',
+        default: true
+      }
+    ]);
+    config.auth.setupGoogleSignIn = setupGoogleSignIn;
+
+    const { allowAnonymous } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'allowAnonymous',
+        message: 'Allow anonymous users to access the app before signing in?',
+        default: false
+      }
+    ]);
+    config.auth.allowAnonymous = allowAnonymous;
+  }
+
+  // Database setup
+  const { setupDatabase } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'setupDatabase',
+      message: 'Set up a production database?',
+      default: false
+    }
+  ]);
+
+  if (setupDatabase) {
+    const { dbProvider } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'dbProvider',
+        message: 'Which database provider?',
+        choices: [
+          { name: 'Neon', value: 'neon' },
+          { name: 'Supabase', value: 'supabase' },
+          { name: 'Other PostgreSQL (I have a connection string)', value: 'other' }
+        ]
+      }
+    ]);
+
+    config.database = { provider: dbProvider };
+
+    const { dbAction } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'dbAction',
+        message: 'Create a new database project or use an existing one?',
+        choices: [
+          { name: 'Create a new project', value: 'create' },
+          { name: 'Use an existing project', value: 'existing' }
+        ]
+      }
+    ]);
+    config.database.action = dbAction;
+
+    if (dbAction === 'create') {
+      const { dbProjectName } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'dbProjectName',
+          message: 'Enter a name for your database project:',
+          default: `${serviceSlug}-db`
+        }
+      ]);
+      config.database.projectName = dbProjectName;
+    } else {
+      if (dbProvider === 'other') {
+        const { connectionString } = await inquirer.prompt([
+          {
+            type: 'input',
+            name: 'connectionString',
+            message: 'Enter your PostgreSQL connection string:',
+            validate: (input: string) => {
+              if (!input.trim()) return 'Connection string is required';
+              if (!input.startsWith('postgresql://') && !input.startsWith('postgres://')) {
+                return 'Connection string should start with "postgresql://" or "postgres://"';
+              }
+              return true;
+            }
+          }
+        ]);
+        config.database.connectionString = connectionString;
+      } else {
+        const { dbProjectName } = await inquirer.prompt([
+          {
+            type: 'input',
+            name: 'dbProjectName',
+            message: 'Enter the name or ID of your existing database project:',
+            validate: (input: string) => input.trim() ? true : 'Project name is required'
+          }
+        ]);
+        config.database.projectName = dbProjectName;
+      }
     }
   }
 
-  // Generate Node.js development configuration files
-  await generateNodeEnvFile(directory, replacements);
-  
-  // Generate UI configuration files (still need this for Firebase config)
-  await generateFirebaseConfig(directory, config.firebase);
-  
-  // Platform-specific templates are kept as templates and only populated during deployment
-  logger.debug('Development configuration files generated successfully');
-  logger.debug('Platform-specific templates ready for deployment');
-}
-
-async function generateNodeEnvFile(directory: string, replacements: Record<string, string>): Promise<void> {
-  const templatePath = path.join(directory, 'server', '.env.example');
-  const outputPath = path.join(directory, 'server', '.env');
-  
-  // The .env.example should exist in the template
-  if (!await fs.pathExists(templatePath)) {
-    logger.error('Template missing required file: server/.env.example');
-    throw new Error('Invalid template: server/.env.example not found');
-  }
-  
-  await replaceTemplateFile(templatePath, outputPath, replacements);
-  logger.debug('Generated server/.env for Node.js development');
-}
-
-async function generateFirebaseConfig(directory: string, firebase: { projectId: string; apiKey: string; messagingSenderId: string; appId: string; measurementId: string }): Promise<void> {
-  const templatePath = path.join(directory, 'ui', 'src', 'lib', 'firebase-config.template.json');
-  const outputPath = path.join(directory, 'ui', 'src', 'lib', 'firebase-config.json');
-  
-  // Use the complete Firebase configuration from the setup process
-  const firebaseConfig = {
-    apiKey: firebase.apiKey,
-    authDomain: `${firebase.projectId}.firebaseapp.com`,
-    projectId: firebase.projectId,
-    storageBucket: `${firebase.projectId}.appspot.com`,
-    messagingSenderId: firebase.messagingSenderId,
-    appId: firebase.appId,
-    measurementId: firebase.measurementId
-  };
-  
-  await fs.ensureDir(path.dirname(outputPath));
-  await fs.writeFile(outputPath, JSON.stringify(firebaseConfig, null, 2), 'utf-8');
-  logger.debug('Generated ui/src/lib/firebase-config.json with complete Firebase configuration');
-}
-
-async function replaceTemplateFile(
-  templatePath: string, 
-  outputPath: string, 
-  replacements: Record<string, string>
-): Promise<void> {
-  let content = await fs.readFile(templatePath, 'utf-8');
-  
-  // Replace all placeholders
-  for (const [placeholder, value] of Object.entries(replacements)) {
-    content = content.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), value);
-  }
-  
-  // Ensure output directory exists
-  await fs.ensureDir(path.dirname(outputPath));
-  
-  // Write the generated file
-  await fs.writeFile(outputPath, content, 'utf-8');
-}
-
-export async function validateConfigGeneration(directory: string): Promise<boolean> {
-  const requiredFiles = [
-    'server/.env',
-    'ui/src/lib/firebase-config.json'
-  ];
-  
-  // Check that platform templates exist (but are not populated yet)
-  const platformTemplates = [
-    'server/platforms/cloudflare/wrangler.toml.template',
-    'server/platforms/cloudflare/.dev.vars.template'
-  ];
-  
-  for (const file of requiredFiles) {
-    const filePath = path.join(directory, file);
-    if (!await fs.pathExists(filePath)) {
-      logger.debug(`Config validation failed: missing ${file}`);
-      return false;
+  // Deploy setup
+  const { setupDeploy } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'setupDeploy',
+      message: 'Set up production deployment (Cloudflare)?',
+      default: false
     }
-    
-    // Check if file still contains placeholders (indicating replacement failed)
-    const content = await fs.readFile(filePath, 'utf-8');
-    if (content.includes('{{') && content.includes('}}')) {
-      logger.debug(`Config validation failed: ${file} still contains placeholders`);
-      return false;
+  ]);
+
+  if (setupDeploy) {
+    config.deploy = { provider: 'cloudflare' };
+
+    const { workerName } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'workerName',
+        message: 'Enter a name for your Cloudflare Worker:',
+        default: `${serviceSlug}-api`
+      }
+    ]);
+    config.deploy.workerName = workerName;
+  }
+
+  // Write the config file (with overwrite confirmation)
+  const outputPath = path.join(process.cwd(), 'volo-config.json');
+
+  if (fs.existsSync(outputPath)) {
+    const { overwrite } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'overwrite',
+        message: 'volo-config.json already exists. Overwrite it?',
+        default: false
+      }
+    ]);
+
+    if (!overwrite) {
+      logger.info('Config generation cancelled.');
+      return;
     }
   }
-  
-  // Validate platform templates exist
-  for (const template of platformTemplates) {
-    const templatePath = path.join(directory, template);
-    if (!await fs.pathExists(templatePath)) {
-      logger.debug(`Config validation failed: missing platform template ${template}`);
-      return false;
-    }
-  }
-  
-  return true;
-} 
+
+  await fs.writeJson(outputPath, config, { spaces: 2 });
+
+  console.log('');
+  logger.success(`Config written to ./volo-config.json`);
+  logger.warning(
+    'This file may contain secrets — do not commit it. Use examples/ for safe samples; in CI, generate the file from injected secrets.'
+  );
+  logger.info(`Usage: npx create-volo-app ${config.projectName} --config ./volo-config.json`);
+  console.log('');
+}

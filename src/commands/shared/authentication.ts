@@ -1,10 +1,11 @@
 import chalk from 'chalk';
 import ora from 'ora';
 import { logger } from '../../utils/logger.js';
-import { execFirebase, execPnpm } from '../../utils/cli.js';
+import { execFirebase, execWrangler } from '../../utils/cli.js';
 import { execNeonctl } from '../../utils/neonctl.js';
 import { AuthStatus } from '../shared/types.js';
 import { askToProceedWithAuthentication } from '../shared/prompts.js';
+import type { VoloConfig } from '../../utils/config.js';
 
 export async function checkAuthenticationStatus(databaseProvider?: string): Promise<AuthStatus> {
   const status: AuthStatus = {
@@ -29,7 +30,7 @@ export async function checkAuthenticationStatus(databaseProvider?: string): Prom
       // This command will fail with an error message if not authenticated, instead of hanging
       const { stdout, stderr } = await execNeonctl(['projects', 'list'], { 
         stdio: 'pipe', 
-        timeout: 5000 // 5 second timeout
+        timeout: 15000
       });
       
       // If the command succeeds, user is authenticated
@@ -60,8 +61,7 @@ export async function checkAuthenticationStatus(databaseProvider?: string): Prom
 
   // Check Cloudflare auth
   try {
-    const { execa } = await import('execa');
-    const { stdout } = await execa('wrangler', ['whoami'], { stdio: 'pipe' });
+    const { stdout } = await execWrangler(['whoami'], { stdio: 'pipe' });
     status.cloudflare = stdout.includes('@') || stdout.includes('You are logged in');
   } catch {
     status.cloudflare = false;
@@ -70,7 +70,11 @@ export async function checkAuthenticationStatus(databaseProvider?: string): Prom
   return status;
 }
 
-export async function handleBatchAuthentication(authStatus: AuthStatus, databaseProvider?: string): Promise<void> {
+export async function handleBatchAuthentication(
+  authStatus: AuthStatus,
+  databaseProvider?: string,
+  configData?: VoloConfig
+): Promise<void> {
   const needsAuth: string[] = [];
   
   if (!authStatus.firebase) needsAuth.push('Firebase');
@@ -83,7 +87,7 @@ export async function handleBatchAuthentication(authStatus: AuthStatus, database
     return;
   }
 
-  const proceed = await askToProceedWithAuthentication(needsAuth);
+  const proceed = await askToProceedWithAuthentication(needsAuth, configData);
 
   if (!proceed) {
     throw new Error('Authentication is required to continue');
@@ -137,8 +141,7 @@ export async function handleBatchAuthentication(authStatus: AuthStatus, database
           console.log(chalk.white('A browser tab will open for you to sign in to your Cloudflare account.'));
           logger.newLine();
           
-          const { execa } = await import('execa');
-          await execa('wrangler', ['login'], { stdio: 'inherit', timeout: 300000 });
+          await execWrangler(['login'], { stdio: 'inherit', timeout: 300000 });
           
           console.log(chalk.green(`✅ ${service} authentication completed`));
           break;

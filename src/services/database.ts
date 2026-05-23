@@ -2,8 +2,9 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
 import { logger } from '../utils/logger.js';
-import { validateUrl } from '../utils/validation.js';
+import { resolveExistingDatabaseProject, validateUrl, sanitizeProjectName } from '../utils/validation.js';
 import { execNeonctl } from '../utils/neonctl.js';
+import type { VoloConfig } from '../utils/config.js';
 
 interface DatabaseConfig {
   url: string;
@@ -17,7 +18,21 @@ interface NeonProject {
   pg_version: number;
 }
 
-export async function setupDatabase(databasePreference?: string, fastMode = false, projectName?: string): Promise<DatabaseConfig> {
+function assertConfigModeFail(configData: VoloConfig | undefined, message: string): void {
+  if (configData) {
+    throw new Error(message);
+  }
+}
+
+export async function setupDatabase(databasePreference?: string, fastMode = false, serviceSlug?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
+  const dbConfig = configData?.database;
+
+  // If config provides a connection string directly, use it
+  if (dbConfig?.connectionString) {
+    logger.info(`Using database connection string from config`);
+    return { url: dbConfig.connectionString, provider: dbConfig.provider || 'other' };
+  }
+
   logger.newLine();
   console.log(chalk.yellow.bold('🗄️  Setting up PostgreSQL Database'));
   console.log(chalk.white('Your app needs a database to store application data (posts, user profiles, etc).'));
@@ -26,7 +41,12 @@ export async function setupDatabase(databasePreference?: string, fastMode = fals
 
   let provider: string;
 
-  if (databasePreference && ['neon', 'supabase', 'other'].includes(databasePreference)) {
+  // Config-driven: provider comes from config.database.provider
+  if (dbConfig?.provider) {
+    provider = dbConfig.provider;
+    logger.info(`Using database provider from config: ${provider}`);
+    logger.newLine();
+  } else if (databasePreference && ['neon', 'supabase', 'other'].includes(databasePreference)) {
     provider = databasePreference;
     logger.info(`Using your preferred database provider: ${provider}`);
     logger.newLine();
@@ -64,13 +84,13 @@ export async function setupDatabase(databasePreference?: string, fastMode = fals
 
   switch (provider) {
     case 'neon':
-      return await setupNeonDatabase(fastMode, projectName);
+      return await setupNeonDatabase(fastMode, serviceSlug, configData);
     case 'supabase':
       // Import and use the dedicated Supabase service
       const { setupSupabaseDatabase } = await import('./supabase.js');
-      return await setupSupabaseDatabase(fastMode, projectName);
+      return await setupSupabaseDatabase(fastMode, serviceSlug, configData);
     case 'other':
-      return await setupOtherDatabase();
+      return await setupOtherDatabase(configData);
     default:
       throw new Error('Invalid database provider selected');
   }
@@ -98,7 +118,7 @@ async function isNeonAuthenticated(): Promise<boolean> {
   try {
     // Check authentication by trying to list projects
     // This doesn't trigger browser login like 'me' command does
-    await execNeonctl(['projects', 'list'], { stdio: 'pipe', timeout: 5000 });
+    await execNeonctl(['projects', 'list'], { stdio: 'pipe', timeout: 15000 });
     return true;
   } catch (error) {
     logger.debug(`Neon authentication check failed: ${error}`);
@@ -161,9 +181,13 @@ async function getNeonConnectionString(projectId: string): Promise<string | null
   }
 }
 
-async function setupNeonDatabase(fastMode = false, projectName?: string): Promise<DatabaseConfig> {
+async function setupNeonDatabase(fastMode = false, serviceSlug?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
   logger.info('Setting up Neon database...');
   logger.newLine();
+
+  const dbConfig = configData?.database;
+  const configAction = dbConfig?.action;
+  const configProjectName = dbConfig?.projectName;
 
   // Check if Neon CLI is available with a timeout fallback
   logger.debug('Starting neonctl CLI availability check...');
@@ -193,7 +217,11 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
     logger.info('  • The neonctl package is not available in npm registry');
     logger.info('Using manual setup instead - you\'ll need to create the database yourself.');
     logger.newLine();
-    return await setupNeonDatabaseManual();
+    assertConfigModeFail(
+      configData,
+      'Neon CLI is not available in config mode. Provide database.connectionString in volo-config.json or install and authenticate neonctl before running.'
+    );
+    return await setupNeonDatabaseManual(configData);
   }
 
   logger.success('Neon CLI is available!');
@@ -203,7 +231,11 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
   const isAuthenticated = await isNeonAuthenticated();
   if (!isAuthenticated) {
     logger.warning('Neon authentication failed. Using manual setup instead.');
-    return await setupNeonDatabaseManual();
+    assertConfigModeFail(
+      configData,
+      'Neon is not authenticated in config mode. Run `neonctl auth` first or provide database.connectionString in volo-config.json.'
+    );
+    return await setupNeonDatabaseManual(configData);
   }
 
   // List existing projects
@@ -211,9 +243,15 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
   const projects = await listNeonProjects();
   spinner.stop();
 
-  if (projects.length === 0 || fastMode) {
+  // Config-driven: action determines create vs existing without prompting
+  const shouldCreate = configAction === 'create' || fastMode || projects.length === 0;
+  const shouldSelectExisting = configAction === 'existing' && projects.length > 0;
+
+  if (shouldCreate && !shouldSelectExisting) {
     if (projects.length === 0) {
       console.log(chalk.yellow('No existing Neon projects found.'));
+    } else if (configAction === 'create') {
+      console.log(chalk.blue('Creating new Neon project (from config)...'));
     } else if (fastMode) {
       console.log(chalk.blue('Creating new Neon project (fast mode)...'));
     }
@@ -221,16 +259,23 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
     
     let dbProjectName: string;
     
-    if (fastMode) {
-      // Use project name in fast mode
-      dbProjectName = `${projectName || 'volo-app'}-db`;
+    if (configProjectName) {
+      // Config-supplied name for a create: sanitize before sending to Neon API
+      dbProjectName = sanitizeProjectName(configProjectName) || sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`);
+    } else if (fastMode) {
+      dbProjectName = sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`);
     } else {
+      assertConfigModeFail(
+        configData,
+        'database.projectName is required in config mode when creating a new Neon project.'
+      );
+      const sanitizedDefault = sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`) || 'volo-app-db';
       const response = await inquirer.prompt([
         {
           type: 'input',
           name: 'projectName',
           message: 'Enter a name for your new Neon project:',
-          default: 'volo-app-db',
+          default: sanitizedDefault,
           validate: (input: string) => {
             if (!input.trim()) {
               return 'Project name is required';
@@ -248,13 +293,13 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
     const newProject = await createNeonProject(dbProjectName);
     if (!newProject) {
       logger.warning('Failed to create new project. Using manual setup instead.');
-      return await setupNeonDatabaseManual();
+      return await setupNeonDatabaseManual(configData);
     }
 
     const connectionString = await getNeonConnectionString(newProject.id);
     if (!connectionString) {
       logger.warning('Failed to retrieve connection string. Using manual setup instead.');
-      return await setupNeonDatabaseManual();
+      return await setupNeonDatabaseManual(configData);
     }
 
     logger.success('Neon database configured!');
@@ -266,11 +311,20 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
     };
   }
 
-  // Declare projectId at function scope
-  let projectId: string;
+  let projectId: string | undefined;
 
-  // User has existing projects but not in fast mode
-  if (!fastMode) {
+  if (configAction === 'existing') {
+    if (projects.length === 0) {
+      throw new Error(
+        'database.action is "existing" but no Neon projects were found. Use action "create" or create a project in the Neon console first.'
+      );
+    }
+
+    logger.info('Using existing Neon project (from config)...');
+    const selected = resolveExistingDatabaseProject(projects, configProjectName, 'Neon');
+    projectId = selected.id;
+  } else if (!fastMode) {
+    // Interactive selection when user has existing projects
     console.log(chalk.green(`Found ${projects.length} existing Neon project(s)`));
     logger.newLine();
 
@@ -297,12 +351,13 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
     ]);
 
     if (selectedProject === 'new') {
+      const sanitizedDefault = sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`) || 'volo-app-db';
       const { dbProjectName } = await inquirer.prompt([
         {
           type: 'input',
           name: 'dbProjectName',
           message: 'Enter a name for your new Neon project:',
-          default: `${projectName || 'volo-app'}-db`,
+          default: sanitizedDefault,
           validate: (input: string) => {
             if (!input.trim()) {
               return 'Project name is required';
@@ -318,29 +373,23 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
       const newProject = await createNeonProject(dbProjectName);
       if (!newProject) {
         logger.warning('Failed to create new project. Using manual setup instead.');
-        return await setupNeonDatabaseManual();
+        return await setupNeonDatabaseManual(configData);
       }
       projectId = newProject.id;
     } else {
       projectId = selectedProject;
     }
-  } else {
-    // Fast mode: create new project even if existing ones exist
-    const dbProjectName = `${projectName || 'volo-app'}-db`;
-    
-    const newProject = await createNeonProject(dbProjectName);
-    if (!newProject) {
-      logger.warning('Failed to create new project. Using manual setup instead.');
-      return await setupNeonDatabaseManual();
-    }
-    projectId = newProject.id;
+  }
+
+  if (!projectId) {
+    throw new Error('Neon project was not selected or created');
   }
 
   // Get connection string for the selected/created project
   const connectionString = await getNeonConnectionString(projectId);
   if (!connectionString) {
     logger.warning('Failed to retrieve connection string. Using manual setup instead.');
-    return await setupNeonDatabaseManual();
+    return await setupNeonDatabaseManual(configData);
   }
 
   logger.success('Neon database configured!');
@@ -352,7 +401,11 @@ async function setupNeonDatabase(fastMode = false, projectName?: string): Promis
   };
 }
 
-async function setupNeonDatabaseManual(): Promise<DatabaseConfig> {
+async function setupNeonDatabaseManual(configData?: VoloConfig): Promise<DatabaseConfig> {
+  assertConfigModeFail(
+    configData,
+    'Neon manual setup is not available in config mode. Provide database.connectionString in volo-config.json or ensure neonctl is installed and authenticated.'
+  );
   console.log(chalk.yellow('📋 Manual setup required:'));
   console.log(chalk.gray('1. Go to: https://neon.tech'));
   console.log(chalk.gray('2. Sign up for a free account (if you don\'t have one)'));
@@ -405,9 +458,26 @@ async function setupNeonDatabaseManual(): Promise<DatabaseConfig> {
   };
 }
 
-export async function setupOtherDatabase(): Promise<DatabaseConfig> {
+export async function setupOtherDatabase(configData?: VoloConfig): Promise<DatabaseConfig> {
   logger.info('Setting up custom PostgreSQL database...');
   logger.newLine();
+
+  // If config provides a connection string directly, use it (no prompt)
+  const configuredConnString = configData?.database?.connectionString;
+  if (configuredConnString) {
+    logger.info('Using PostgreSQL connection string from config');
+    logger.success('Custom PostgreSQL database configured!');
+    logger.newLine();
+    return {
+      url: configuredConnString,
+      provider: 'other'
+    };
+  }
+
+  assertConfigModeFail(
+    configData,
+    'database.connectionString is required in config mode when database.provider is "other".'
+  );
 
   console.log(chalk.gray('You can use any PostgreSQL provider that gives you a connection string.'));
   console.log(chalk.gray('Popular options include:'));

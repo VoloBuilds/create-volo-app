@@ -1,5 +1,6 @@
 import fs from 'fs-extra';
 import path from 'path';
+import { execPnpm } from './cli.js';
 import { logger } from './logger.js';
 import { ProjectConfig } from '../commands/shared/types.js';
 
@@ -21,12 +22,14 @@ export async function generateModularConfigFiles(
   // Generate Firebase configuration
   await generateModularFirebaseConfig(directory, config, connectionFlags);
   
-  // Generate UI environment for emulator settings
-  await generateModularUIEnv(directory, config, connectionFlags);
+  // Generate UI environment for local dev
+  await writeLocalUiEnv(directory, config, connectionFlags);
   
-  // Generate wrangler config only if deployment is connected
+  // Generate wrangler configs only if deployment is connected
   if (connectionFlags.deploy) {
     await generateWranglerConfig(directory, config);
+    await generateUICloudflareConfig(directory, config.cloudflare.workerName);
+    logger.debug('Generated ui/wrangler.toml from template for static assets deployment');
   }
   
   logger.debug('Modular configuration files generated successfully');
@@ -63,9 +66,11 @@ async function generateModularServerEnv(
   envContent += `# Allow anonymous users (server will accept anonymous Firebase tokens)\n`;
   envContent += `ALLOW_ANONYMOUS_USERS=${config.firebase.allowAnonymous ? 'true' : 'false'}\n\n`;
   
-  // Environment setting
-  envContent += `# Environment\n`;
-  envContent += `NODE_ENV=development\n`;
+  // Environment setting (local development only)
+  if (!connectionFlags.auth) {
+    envContent += `# Environment\n`;
+    envContent += `NODE_ENV=development\n`;
+  }
   
   await fs.ensureDir(path.dirname(envPath));
   await fs.writeFile(envPath, envContent);
@@ -110,7 +115,7 @@ async function generateModularFirebaseConfig(
   logger.debug(`Generated Firebase config for ${connectionFlags.auth ? 'production' : 'local emulator'}`);
 }
 
-async function generateModularUIEnv(
+export async function writeLocalUiEnv(
   directory: string, 
   config: ProjectConfig, 
   connectionFlags: ConnectionFlags
@@ -122,28 +127,59 @@ async function generateModularUIEnv(
   // Firebase emulator setting
   if (connectionFlags.auth) {
     envContent += `# Production Firebase Auth\n`;
-    envContent += `VITE_FIREBASE_EMULATOR=false\n\n`;
+    envContent += `VITE_USE_FIREBASE_EMULATOR=false\n\n`;
   } else {
     envContent += `# Local Firebase Auth (emulator)\n`;
-    envContent += `VITE_FIREBASE_EMULATOR=true\n\n`;
+    envContent += `VITE_USE_FIREBASE_EMULATOR=true\n`;
+    envContent += `VITE_FIREBASE_AUTH_EMULATOR_PORT=5503\n\n`;
   }
   
   // Anonymous user configuration
   envContent += `# Allow anonymous users to access app without authentication\n`;
   envContent += `VITE_ALLOW_ANONYMOUS_USERS=${config.firebase.allowAnonymous ? 'true' : 'false'}\n\n`;
   
-  // API URL setting
-  if (connectionFlags.deploy) {
-    envContent += `# Production API URL (will be set during deployment)\n`;
-    envContent += `# VITE_API_URL=https://${config.cloudflare.workerName}.YOUR_SUBDOMAIN.workers.dev\n\n`;
-  } else {
-    envContent += `# Local API URL\n`;
-    envContent += `VITE_API_URL=http://localhost:8787\n\n`;
-  }
+  // Local API URL — never write production workers.dev URL here
+  envContent += `# Local API URL\n`;
+  envContent += `VITE_API_URL=http://localhost:5500\n\n`;
   
   await fs.ensureDir(path.dirname(envPath));
   await fs.writeFile(envPath, envContent);
-  logger.debug('Generated ui/.env.local with modular configuration');
+  logger.debug('Generated ui/.env.local with local dev configuration');
+}
+
+/**
+ * Generates `ui/wrangler.toml` from the template and adds deploy scripts +
+ * wrangler devDependency to `ui/package.json`.  Shared by both initial app
+ * creation (`generateModularConfigFiles`) and later `connect:deploy`.
+ */
+export async function generateUICloudflareConfig(directory: string, workerName: string): Promise<void> {
+  const templatePath = path.join(directory, 'ui', 'platforms', 'cloudflare', 'wrangler.toml.template');
+  const wranglerPath = path.join(directory, 'ui', 'wrangler.toml');
+
+  const template = await fs.readFile(templatePath, 'utf-8');
+  const wranglerConfig = template.replace(/{{WORKER_NAME}}/g, workerName);
+
+  await fs.ensureDir(path.dirname(wranglerPath));
+  await fs.writeFile(wranglerPath, wranglerConfig);
+
+  const uiPackageJsonPath = path.join(directory, 'ui', 'package.json');
+  if (await fs.pathExists(uiPackageJsonPath)) {
+    const packageJson = JSON.parse(await fs.readFile(uiPackageJsonPath, 'utf-8'));
+    packageJson.scripts = {
+      ...packageJson.scripts,
+      'deploy': 'pnpm run build && wrangler deploy',
+      'deploy:cf': 'pnpm run deploy',
+    };
+    packageJson.devDependencies = {
+      ...packageJson.devDependencies,
+      'wrangler': '^4.16.0',
+    };
+    await fs.writeFile(uiPackageJsonPath, JSON.stringify(packageJson, null, 2));
+
+    const uiDir = path.join(directory, 'ui');
+    await execPnpm(['install'], { cwd: uiDir, stdio: 'pipe' });
+    logger.debug('Installed ui dependencies (wrangler)');
+  }
 }
 
 async function generateWranglerConfig(directory: string, config: ProjectConfig): Promise<void> {

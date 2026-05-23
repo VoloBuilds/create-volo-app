@@ -2,10 +2,17 @@
 node_modules/
 *.pnp
 .pnp.js
+.pnpm-store/
 
 # Production builds
 dist/
 build/
+
+# Scaffold config (may contain secrets; committed samples live under examples/)
+volo-config.json
+
+# Local test artifacts
+.tmp/
 
 # Environment variables
 .env
@@ -99,8 +106,5 @@ temp/
 Thumbs.db
 .DS_Store
 
-# Test apps created during development
-test-* 
-
-# Dev stuff
-docs/features/*
+# Test apps created during development (root-level only)
+/test-*/

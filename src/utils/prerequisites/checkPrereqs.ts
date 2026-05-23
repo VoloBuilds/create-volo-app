@@ -10,7 +10,7 @@ import type {
   PrerequisiteResult, 
   CheckPrerequisitesResult 
 } from './types.js';
-import { corePrerequisites, databasePrerequisites } from './prereqList.js';
+import { corePrerequisites, databasePrerequisites, deploymentPrerequisites } from './prereqList.js';
 import { checkNetworkConnectivity } from './networkCheck.js';
 import { installCliTool, checkLocalCliTool } from './installCLIs.js';
 import { checkDatabaseChoice, displayManualInstallInstructions } from './userInstructions.js';
@@ -81,7 +81,10 @@ async function checkPrerequisite(prereq: Prerequisite): Promise<PrerequisiteResu
         }
         
         logger.debug(`${prereq.name} found but failed to run: ${error}`);
-        // CLI exists but can't run (dependency issues, etc.)
+        // Global binary exists but version check failed — prefer global over bundled local copies
+        if (globalFound) {
+          return { status: 'ok', currentVersion: 'installed globally' };
+        }
         // Try local installation if available
         if (prereq.canInstallLocally) {
           const localResult = await checkLocalCliTool(prereq);
@@ -89,7 +92,6 @@ async function checkPrerequisite(prereq: Prerequisite): Promise<PrerequisiteResu
             return { status: 'installed_locally', currentVersion: localResult.currentVersion };
           }
         }
-        // If we can't use local, treat as missing since the global one doesn't work
         return { status: 'missing' };
       }
     } else if (globalFound && !prereq.version) {
@@ -113,20 +115,43 @@ async function checkPrerequisite(prereq: Prerequisite): Promise<PrerequisiteResu
   }
 }
 
+/**
+ * Whether to run the local-only → global CLI upgrade flow.
+ * - Interactive: offer upgrade (with prompt).
+ * - Fast / config mode: auto-upgrade without prompt.
+ * - autoInstall without fastMode: skip (missing tools handled in the missing-prereq block).
+ */
+function shouldUpgradeLocalClisToGlobal(options: PrerequisiteOptions): boolean {
+  if (options.fastMode) {
+    return true;
+  }
+  if (options.autoInstall) {
+    return false;
+  }
+  return true;
+}
+
 export async function checkPrerequisites(options: PrerequisiteOptions = {}): Promise<CheckPrerequisitesResult> {
+  // Fast mode implies auto-install: skip prompts and accept sensible defaults.
+  if (options.fastMode) {
+    options.autoInstall = true;
+  }
+
   const hasNetwork = await checkNetworkConnectivity();
   if (!hasNetwork) {
     logger.warning('No internet connection detected. Some features may not work properly.');
     logger.info('Please ensure you have a stable internet connection and try again.');
-    
-    const { continueOffline } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'continueOffline',
-        message: 'Continue anyway? (You can set up services manually later)',
-        default: false
-      }
-    ]);
+
+    const continueOffline = options.fastMode
+      ? true
+      : (await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'continueOffline',
+            message: 'Continue anyway? (You can set up services manually later)',
+            default: false
+          }
+        ])).continueOffline;
 
     if (!continueOffline) {
       process.exit(1);
@@ -162,6 +187,10 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
     } else {
       logger.info('No database provider selected - skipping database CLI checks');
     }
+
+    if (options.includeDeployPrerequisites && deploymentPrerequisites.cloudflare) {
+      prerequisites.push(deploymentPrerequisites.cloudflare);
+    }
   } else {
     // Local mode: only check core prerequisites (Node.js, pnpm, Git)
     // Skip database CLI checks since local mode uses embedded PostgreSQL
@@ -171,6 +200,7 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
 
   let recheckNeeded = true;
   const justInstalledLocally = new Set<string>(); // Track tools installed locally in this session
+  const declinedGlobalUpgrade = new Set<string>(); // Track tools user declined to upgrade globally
   
   while (recheckNeeded) {
     recheckNeeded = false;
@@ -203,15 +233,15 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
         case 'installed_locally':
           logger.success(`${prereq.name} ${result.currentVersion || ''} ✓ (installed locally)`);
           // Only track for upgrade if not just installed locally in this session
-          if (prereq.canInstallGlobally && !justInstalledLocally.has(prereq.name)) {
+          if (prereq.canInstallGlobally && !justInstalledLocally.has(prereq.name) && !declinedGlobalUpgrade.has(prereq.name)) {
             localOnly.push({ prereq, currentVersion: result.currentVersion! });
           }
           break;
       }
     }
 
-    // Handle tools that are only available locally but could be installed globally
-    if (localOnly.length > 0 && !options.autoInstall) {
+    // Handle tools that are only available locally but could be installed globally.
+    if (localOnly.length > 0 && shouldUpgradeLocalClisToGlobal(options)) {
       logger.newLine();
       console.log(chalk.cyan.bold('🔄 Local Installation Detected'));
       logger.newLine();
@@ -231,14 +261,16 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
       console.log(chalk.white('  • Better IDE integration'));
       logger.newLine();
 
-      const { upgradeToGlobal } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'upgradeToGlobal',
-          message: 'Would you like to install these tools globally?',
-          default: true
-        }
-      ]);
+      const upgradeToGlobal = options.fastMode
+        ? true
+        : (await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'upgradeToGlobal',
+              message: 'Would you like to install these tools globally?',
+              default: true
+            }
+          ])).upgradeToGlobal;
 
       if (upgradeToGlobal) {
         logger.newLine();
@@ -246,22 +278,36 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
         logger.newLine();
         
         const failedInstalls: Prerequisite[] = [];
+        let globalInstallCount = 0;
+        let localFallbackCount = 0;
         
         for (const { prereq } of localOnly) {
-          const success = await installCliTool(prereq, true); // Install globally
-          if (!success) {
+          const result = await installCliTool(prereq, true); // Install globally
+          if (result === 'global') {
+            globalInstallCount++;
+          } else if (result === 'local') {
+            localFallbackCount++;
+            justInstalledLocally.add(prereq.name);
+          } else {
             failedInstalls.push(prereq);
+            justInstalledLocally.add(prereq.name);
           }
         }
         
-        if (failedInstalls.length === 0) {
-          logger.newLine();
+        logger.newLine();
+        if (globalInstallCount > 0 && failedInstalls.length === 0 && localFallbackCount === 0) {
           logger.success('All CLI tools installed globally! ✨');
           logger.newLine();
           console.log(chalk.green('🎉 Your tools are now available system-wide.'));
           console.log(chalk.white('You may need to restart your terminal for PATH changes to take effect.'));
+        } else if (globalInstallCount > 0) {
+          logger.success('Some CLI tools were installed globally.');
+          if (localFallbackCount > 0) {
+            logger.info(`${localFallbackCount} tool(s) will continue using local installation (global permissions unavailable).`);
+          }
+        } else if (localFallbackCount > 0) {
+          logger.info('Global install unavailable — continuing with local CLI installations.');
         } else {
-          logger.newLine();
           logger.warning('Some tools couldn\'t be installed globally:');
           for (const prereq of failedInstalls) {
             console.log(chalk.yellow(`  • ${prereq.name} (will continue using local version)`));
@@ -271,6 +317,10 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
         // Recheck after installation
         recheckNeeded = true;
         continue;
+      } else {
+        for (const { prereq } of localOnly) {
+          declinedGlobalUpgrade.add(prereq.name);
+        }
       }
     }
 
@@ -345,41 +395,48 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
         logger.newLine();
         
         const failedInstalls: Prerequisite[] = [];
+        let globalInstallCount = 0;
+        let localInstallCount = 0;
         
         for (const prereq of canInstallViaNpm) {
-          let success = false;
+          let installResult: 'global' | 'local' | false = false;
           
           // Try preferred installation method first
           if ((isGlobal && prereq.canInstallGlobally) || (!isGlobal && prereq.canInstallLocally)) {
-            success = await installCliTool(prereq, isGlobal);
+            installResult = await installCliTool(prereq, isGlobal);
           }
           
           // If preferred method isn't supported or failed, try the alternative
-          if (!success) {
+          if (!installResult) {
             if (isGlobal && prereq.canInstallLocally) {
               logger.info(`${prereq.name} doesn't support global installation, trying local installation...`);
-              success = await installCliTool(prereq, false); // Try local
-              if (success) {
-                // Track that this tool was installed locally in this session
-                justInstalledLocally.add(prereq.name);
-              }
+              installResult = await installCliTool(prereq, false); // Try local
             } else if (!isGlobal && prereq.canInstallGlobally) {
               logger.info(`${prereq.name} doesn't support local installation, trying global installation...`);
-              success = await installCliTool(prereq, true); // Try global
+              installResult = await installCliTool(prereq, true); // Try global
             }
-          } else if (!isGlobal) {
-            // Track that this tool was installed locally in this session
-            justInstalledLocally.add(prereq.name);
           }
-          
-          if (!success) {
+
+          if (installResult === 'global') {
+            globalInstallCount++;
+          } else if (installResult === 'local') {
+            localInstallCount++;
+            justInstalledLocally.add(prereq.name);
+          } else {
             failedInstalls.push(prereq);
           }
         }
         
         if (failedInstalls.length === 0) {
           logger.newLine();
-          logger.success(`All CLI tools installed ${isGlobal ? 'globally' : 'locally'}! ✨`);
+          if (isGlobal && localInstallCount === 0) {
+            logger.success('All CLI tools installed globally! ✨');
+          } else if (isGlobal && localInstallCount > 0) {
+            logger.success('CLI tools ready.');
+            logger.info(`${localInstallCount} tool(s) installed locally (global permissions unavailable).`);
+          } else {
+            logger.success('All CLI tools installed locally! ✨');
+          }
         } else {
           logger.newLine();
           logger.warning(`Some tools couldn't be installed automatically:`);
@@ -391,7 +448,9 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
       }
       
       if (systemTools.length > 0) {
-        const shouldContinue = await displayManualInstallInstructions(systemTools);
+        const shouldContinue = options.fastMode
+          ? true
+          : await displayManualInstallInstructions(systemTools);
         if (!shouldContinue) {
           recheckNeeded = true;
           continue;
@@ -412,14 +471,16 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
         console.log('');
       }
 
-      const { shouldContinue } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'shouldContinue',
-          message: 'Would you like to continue with outdated tools? (May cause issues)',
-          default: false
-        }
-      ]);
+      const shouldContinue = options.fastMode
+        ? true
+        : (await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'shouldContinue',
+              message: 'Would you like to continue with outdated tools? (May cause issues)',
+              default: false
+            }
+          ])).shouldContinue;
 
       if (!shouldContinue) {
         logger.info('Please update the outdated tools and run create-volo-app again.');
