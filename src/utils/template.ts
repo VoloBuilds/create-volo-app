@@ -282,7 +282,10 @@ export async function validateTemplate(templatePath: string): Promise<boolean> {
     'server/platforms/cloudflare/wrangler.toml.template',
     'ui/platforms/cloudflare/wrangler.toml.template',
     'ui/src/lib/firebase-config.template.json',
-    'scripts/post-setup.js'
+    'scripts/post-setup.js',
+    'scripts/run-dev.js',
+    'scripts/deploy-guard.js',
+    'scripts/parse-wrangler-deploy-url.js',
   ];
   
   for (const file of requiredFiles) {

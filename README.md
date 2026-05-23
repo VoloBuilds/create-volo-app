@@ -163,42 +163,41 @@ Your local development environment includes:
 
 - **Database**: Embedded PostgreSQL at `./data/postgres`
 - **Auth**: Firebase emulator with demo users
-- **Frontend**: `http://localhost:5173`
-- **API**: `http://localhost:8787`
+- **Frontend**: `http://localhost:5501` (5500-block; root `pnpm run dev` assigns ports automatically)
+- **API**: `http://localhost:5500`
 
 All data persists locally between development sessions in the `data` folder within your project
 
 ## Production Deployment
 
-### Backend (Cloudflare Workers)
+From the project root (after `pnpm connect:deploy` or scaffolding with `--deploy`):
+
 ```bash
-cd server
 pnpm run deploy
 ```
 
-**Set production environment variables** (use `wrangler` for easier management):
+This deploys the API Worker first, detects the Worker URL, writes `ui/.env.production`, then deploys the UI static assets Worker.
+
+### Backend secrets (Cloudflare Workers)
+
+For production hardening, prefer Wrangler secrets over plain `[vars]` in `server/wrangler.toml`:
+
 ```bash
-# Recommended: Use wrangler CLI
 cd server
 wrangler secret put DATABASE_URL
-wrangler secret put FIREBASE_PROJECT_ID  
-wrangler secret put FIREBASE_PRIVATE_KEY
-wrangler secret put FIREBASE_CLIENT_EMAIL
-
-# Alternative: Set in Cloudflare dashboard
-# Go to Workers Dashboard > Your Worker > Settings > Variables
 ```
+
+You can also set variables in the Cloudflare dashboard under Workers → your Worker → Settings → Variables.
 
 ### Frontend (Workers Static Assets)
 
-The frontend deploys as a Cloudflare Worker with static assets — the same runtime as the API. This means a single `wrangler` deploy publishes both your UI and API together, with no separate Pages project required.
+The UI deploys as a separate Cloudflare Worker with static assets. Root `pnpm run deploy` handles both API and UI in the correct order.
 
 ```bash
-cd ui
 pnpm run deploy
 ```
 
-Under the hood this runs `wrangler deploy` which uploads the built `ui/dist` directory as Workers Static Assets.
+Under the hood the UI step runs `pnpm run build && wrangler deploy`, uploading `ui/dist` as Workers Static Assets.
 
 **Add your Workers domain to Firebase:**
 - Go to Firebase Console → Authentication → Settings → Authorized domains

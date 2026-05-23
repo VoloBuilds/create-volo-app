@@ -124,7 +124,7 @@ export async function createApp(
     
     // Use the first service for auth status check (they share auth state)
     const authStatus = await checkAuthenticationStatus(servicesToAuthenticate[0] || 'firebase');
-    await handleBatchAuthentication(authStatus, servicesToAuthenticate[0] || 'firebase');
+    await handleBatchAuthentication(authStatus, servicesToAuthenticate[0] || 'firebase', configData);
   }
 
   // Step 4: Setup services (mix of production and local)

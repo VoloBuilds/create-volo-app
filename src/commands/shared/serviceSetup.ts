@@ -116,7 +116,7 @@ export async function setupDatabaseWithRetry(databasePreference?: string, maxRet
         logger.newLine();
         console.log(chalk.yellow.bold('⚡ Manual database setup required:'));
         console.log(chalk.cyan('   1. Create a PostgreSQL database (Neon, Supabase, or other)'));
-        console.log(chalk.cyan('   2. Update DATABASE_URL in server/.dev.vars'));
+        console.log(chalk.cyan('   2. Update DATABASE_URL in server/.env (local Node dev) or server/wrangler.toml [vars] (Cloudflare Workers deploy)'));
         console.log(chalk.cyan('   3. Run: cd server && pnpm run db:push'));
         logger.newLine();
         throw error;

@@ -112,6 +112,14 @@ export function loadConfig(configPath: string): VoloConfig {
   return config;
 }
 
+export function validateConfigForNonInteractive(config: VoloConfig): void {
+  if (!config.projectName?.trim()) {
+    throw new Error(
+      'volo-config.json must include "projectName" for non-interactive setup.'
+    );
+  }
+}
+
 interface CreateOptionsLike {
   template?: string;
   fast?: boolean;

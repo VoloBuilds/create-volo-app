@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import path from 'path';
 import chalk from 'chalk';
 import { createRequire } from 'module';
 import { createApp } from './commands/createApp.js';
@@ -8,7 +9,7 @@ import { checkPrerequisites } from './utils/prerequisites/checkPrereqs.js';
 import { logger } from './utils/logger.js';
 import { connectToService } from './commands/connect/index.js';
 import { showConnectionStatus } from './commands/connect/status.js';
-import { loadConfig, mergeConfigWithOptions, generateConfigInteractively } from './utils/config.js';
+import { loadConfig, mergeConfigWithOptions, generateConfigInteractively, validateConfigForNonInteractive } from './utils/config.js';
 import { assertNoDeprecatedCliFlags } from './utils/deprecatedFlags.js';
 
 const require = createRequire(import.meta.url);
@@ -36,7 +37,7 @@ export async function main() {
     .option('--auth [provider]', 'Setup production Firebase Auth (creation) or connect to existing project')
     .option('--database [provider]', 'Setup production database (creation) or connect to existing project (neon, supabase, custom)')
     .option('--deploy [provider]', 'Production deployment setup (default: cloudflare)')
-    .option('--config <path>', 'Use config file for non-interactive setup')
+    .option('--config [path]', 'Use volo-config.json for non-interactive setup (defaults to ./volo-config.json in cwd)')
     .option('--init-config', 'Generate a volo-config.json via interactive wizard')
     .addHelpText('after', `
 Examples:
@@ -56,8 +57,11 @@ Examples:
   # Modular: production database + local auth/deploy
   npx create-volo-app my-app --database neon
 
-  # Config-driven setup (non-interactive)
-  npx create-volo-app my-app --config ./volo-config.json
+  # Config-driven setup (non-interactive; reads ./volo-config.json in cwd)
+  npx create-volo-app --config
+
+  # Config-driven setup with explicit path
+  npx create-volo-app --config ./volo-config.json
 
   # Generate a config file
   npx create-volo-app --init-config
@@ -100,9 +104,14 @@ Examples:
 
         // Load config file when --config is provided
         let configData;
-        if (options.config) {
-          configData = loadConfig(options.config);
-          logger.info(`Using config: ${options.config}`);
+        if (options.config !== undefined) {
+          const configPath =
+            typeof options.config === 'string' && options.config.trim()
+              ? options.config
+              : path.join(process.cwd(), 'volo-config.json');
+          configData = loadConfig(configPath);
+          validateConfigForNonInteractive(configData);
+          logger.info(`Using config: ${configPath}`);
         }
 
         if (configData) {

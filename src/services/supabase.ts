@@ -271,10 +271,10 @@ async function selectOrCreateProject(
       );
     }
 
-    logger.info('Using existing Supabase project (from config)...');
-    const project = resolveExistingDatabaseProject(projects, configProjectName, 'Supabase');
-    const password = await promptForPassword(project.id, fastMode);
-    return { project, password };
+    resolveExistingDatabaseProject(projects, configProjectName, 'Supabase');
+    throw new Error(
+      'database.connectionString is required in config mode when database.action is "existing". Add the pooled Supabase connection string to volo-config.json.'
+    );
   }
 
   // Interactive mode with existing projects
@@ -363,13 +363,13 @@ export async function setupSupabaseDatabase(fastMode = false, serviceSlug?: stri
   const hasSupabaseCLI = await checkSupabaseCLI();
   if (!hasSupabaseCLI) {
     logger.warning('Supabase CLI not found. Using manual setup instead.');
-    return await setupSupabaseDatabaseManual();
+    return await setupSupabaseDatabaseManual(configData);
   }
 
   const isAuthenticated = await isSupabaseAuthenticated();
   if (!isAuthenticated) {
     logger.warning('Supabase authentication failed. Using manual setup instead.');
-    return await setupSupabaseDatabaseManual();
+    return await setupSupabaseDatabaseManual(configData);
   }
 
   // Get or create project
@@ -380,7 +380,7 @@ export async function setupSupabaseDatabase(fastMode = false, serviceSlug?: stri
   const result = await selectOrCreateProject(fastMode, serviceSlug, dbConfig?.action, dbConfig?.projectName);
   if (!result) {
     logger.warning('Failed to set up project. Using manual setup instead.');
-    return await setupSupabaseDatabaseManual();
+    return await setupSupabaseDatabaseManual(configData);
   }
 
   const { project, password } = result;
@@ -396,7 +396,12 @@ export async function setupSupabaseDatabase(fastMode = false, serviceSlug?: stri
   };
 }
 
-async function setupSupabaseDatabaseManual(): Promise<DatabaseConfig> {
+async function setupSupabaseDatabaseManual(configData?: VoloConfig): Promise<DatabaseConfig> {
+  if (configData) {
+    throw new Error(
+      'Supabase manual setup is not available in config mode. Provide database.connectionString in volo-config.json or ensure the Supabase CLI is installed and authenticated.'
+    );
+  }
   console.log(chalk.yellow('📋 Manual setup required:'));
   console.log(chalk.gray('1. Go to: https://supabase.com/dashboard'));
   console.log(chalk.gray('2. Sign up for a free account (if you don\'t have one)'));

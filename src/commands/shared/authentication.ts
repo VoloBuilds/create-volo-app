@@ -5,6 +5,7 @@ import { execFirebase, execPnpm } from '../../utils/cli.js';
 import { execNeonctl } from '../../utils/neonctl.js';
 import { AuthStatus } from '../shared/types.js';
 import { askToProceedWithAuthentication } from '../shared/prompts.js';
+import type { VoloConfig } from '../../utils/config.js';
 
 export async function checkAuthenticationStatus(databaseProvider?: string): Promise<AuthStatus> {
   const status: AuthStatus = {
@@ -70,7 +71,11 @@ export async function checkAuthenticationStatus(databaseProvider?: string): Prom
   return status;
 }
 
-export async function handleBatchAuthentication(authStatus: AuthStatus, databaseProvider?: string): Promise<void> {
+export async function handleBatchAuthentication(
+  authStatus: AuthStatus,
+  databaseProvider?: string,
+  configData?: VoloConfig
+): Promise<void> {
   const needsAuth: string[] = [];
   
   if (!authStatus.firebase) needsAuth.push('Firebase');
@@ -83,7 +88,7 @@ export async function handleBatchAuthentication(authStatus: AuthStatus, database
     return;
   }
 
-  const proceed = await askToProceedWithAuthentication(needsAuth);
+  const proceed = await askToProceedWithAuthentication(needsAuth, configData);
 
   if (!proceed) {
     throw new Error('Authentication is required to continue');

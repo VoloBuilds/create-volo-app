@@ -11,6 +11,9 @@ build/
 # Scaffold config (may contain secrets; committed samples live under examples/)
 volo-config.json
 
+# Local test artifacts
+.tmp/
+
 # Environment variables
 .env
 .env.local

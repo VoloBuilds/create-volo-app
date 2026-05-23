@@ -18,6 +18,12 @@ interface NeonProject {
   pg_version: number;
 }
 
+function assertConfigModeFail(configData: VoloConfig | undefined, message: string): void {
+  if (configData) {
+    throw new Error(message);
+  }
+}
+
 export async function setupDatabase(databasePreference?: string, fastMode = false, serviceSlug?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
   const dbConfig = configData?.database;
 
@@ -211,7 +217,11 @@ async function setupNeonDatabase(fastMode = false, serviceSlug?: string, configD
     logger.info('  • The neonctl package is not available in npm registry');
     logger.info('Using manual setup instead - you\'ll need to create the database yourself.');
     logger.newLine();
-    return await setupNeonDatabaseManual();
+    assertConfigModeFail(
+      configData,
+      'Neon CLI is not available in config mode. Provide database.connectionString in volo-config.json or install and authenticate neonctl before running.'
+    );
+    return await setupNeonDatabaseManual(configData);
   }
 
   logger.success('Neon CLI is available!');
@@ -221,7 +231,11 @@ async function setupNeonDatabase(fastMode = false, serviceSlug?: string, configD
   const isAuthenticated = await isNeonAuthenticated();
   if (!isAuthenticated) {
     logger.warning('Neon authentication failed. Using manual setup instead.');
-    return await setupNeonDatabaseManual();
+    assertConfigModeFail(
+      configData,
+      'Neon is not authenticated in config mode. Run `neonctl auth` first or provide database.connectionString in volo-config.json.'
+    );
+    return await setupNeonDatabaseManual(configData);
   }
 
   // List existing projects
@@ -251,6 +265,10 @@ async function setupNeonDatabase(fastMode = false, serviceSlug?: string, configD
     } else if (fastMode) {
       dbProjectName = sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`);
     } else {
+      assertConfigModeFail(
+        configData,
+        'database.projectName is required in config mode when creating a new Neon project.'
+      );
       const sanitizedDefault = sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`) || 'volo-app-db';
       const response = await inquirer.prompt([
         {
@@ -275,13 +293,13 @@ async function setupNeonDatabase(fastMode = false, serviceSlug?: string, configD
     const newProject = await createNeonProject(dbProjectName);
     if (!newProject) {
       logger.warning('Failed to create new project. Using manual setup instead.');
-      return await setupNeonDatabaseManual();
+      return await setupNeonDatabaseManual(configData);
     }
 
     const connectionString = await getNeonConnectionString(newProject.id);
     if (!connectionString) {
       logger.warning('Failed to retrieve connection string. Using manual setup instead.');
-      return await setupNeonDatabaseManual();
+      return await setupNeonDatabaseManual(configData);
     }
 
     logger.success('Neon database configured!');
@@ -355,7 +373,7 @@ async function setupNeonDatabase(fastMode = false, serviceSlug?: string, configD
       const newProject = await createNeonProject(dbProjectName);
       if (!newProject) {
         logger.warning('Failed to create new project. Using manual setup instead.');
-        return await setupNeonDatabaseManual();
+        return await setupNeonDatabaseManual(configData);
       }
       projectId = newProject.id;
     } else {
@@ -371,7 +389,7 @@ async function setupNeonDatabase(fastMode = false, serviceSlug?: string, configD
   const connectionString = await getNeonConnectionString(projectId);
   if (!connectionString) {
     logger.warning('Failed to retrieve connection string. Using manual setup instead.');
-    return await setupNeonDatabaseManual();
+    return await setupNeonDatabaseManual(configData);
   }
 
   logger.success('Neon database configured!');
@@ -383,7 +401,11 @@ async function setupNeonDatabase(fastMode = false, serviceSlug?: string, configD
   };
 }
 
-async function setupNeonDatabaseManual(): Promise<DatabaseConfig> {
+async function setupNeonDatabaseManual(configData?: VoloConfig): Promise<DatabaseConfig> {
+  assertConfigModeFail(
+    configData,
+    'Neon manual setup is not available in config mode. Provide database.connectionString in volo-config.json or ensure neonctl is installed and authenticated.'
+  );
   console.log(chalk.yellow('📋 Manual setup required:'));
   console.log(chalk.gray('1. Go to: https://neon.tech'));
   console.log(chalk.gray('2. Sign up for a free account (if you don\'t have one)'));
@@ -451,6 +473,11 @@ export async function setupOtherDatabase(configData?: VoloConfig): Promise<Datab
       provider: 'other'
     };
   }
+
+  assertConfigModeFail(
+    configData,
+    'database.connectionString is required in config mode when database.provider is "other".'
+  );
 
   console.log(chalk.gray('You can use any PostgreSQL provider that gives you a connection string.'));
   console.log(chalk.gray('Popular options include:'));

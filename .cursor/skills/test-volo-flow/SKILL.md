@@ -102,8 +102,8 @@ Local template copy excludes: `node_modules/`, `.git/`, `dist/`, `.next/`, `data
 Required machine-readable lines (do not rename without updating `scripts/test-volo-flow.mjs`):
 
 ```text
-VOLO_DEV_FRONTEND_URL=http://localhost:5173
-VOLO_DEV_BACKEND_URL=http://localhost:8787
+VOLO_DEV_FRONTEND_URL=http://localhost:5501
+VOLO_DEV_BACKEND_URL=http://localhost:5500
 ```
 
 After both URLs appear, the runner polls `GET {backendUrl}/` until `{ "status": "ok" }` or times out (30s).

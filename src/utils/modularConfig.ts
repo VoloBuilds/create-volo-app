@@ -149,11 +149,27 @@ export async function writeLocalUiEnv(
 
 export async function writeProductionApiUrl(directory: string, apiUrl: string): Promise<void> {
   const envPath = path.join(directory, 'ui', '.env.production');
-  const envContent = `# Production API URL\nVITE_API_URL=${apiUrl}\n`;
+  const line = `VITE_API_URL=${apiUrl}`;
 
   await fs.ensureDir(path.dirname(envPath));
-  await fs.writeFile(envPath, envContent);
-  logger.debug(`Wrote production API URL to ui/.env.production`);
+
+  if (!(await fs.pathExists(envPath))) {
+    await fs.writeFile(envPath, `# Production API URL\n${line}\n`);
+    logger.debug('Wrote production API URL to ui/.env.production');
+    return;
+  }
+
+  const content = await fs.readFile(envPath, 'utf-8');
+  const regex = /^VITE_API_URL=.*$/m;
+
+  if (regex.test(content)) {
+    await fs.writeFile(envPath, content.replace(regex, line));
+  } else {
+    const trimmed = content.trimEnd();
+    await fs.writeFile(envPath, `${trimmed}${trimmed ? '\n' : ''}${line}\n`);
+  }
+
+  logger.debug('Wrote production API URL to ui/.env.production');
 }
 
 /**
@@ -181,7 +197,7 @@ export async function generateUICloudflareConfig(directory: string, workerName: 
     };
     packageJson.devDependencies = {
       ...packageJson.devDependencies,
-      'wrangler': '^3.0.0',
+      'wrangler': '^4.16.0',
     };
     await fs.writeFile(uiPackageJsonPath, JSON.stringify(packageJson, null, 2));
 
