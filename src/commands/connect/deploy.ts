@@ -239,9 +239,7 @@ async function updatePackageJsonForCloudflare(projectPath: string) {
     
     if (packageJson.scripts) {
       packageJson.scripts['deploy'] = 'node scripts/deploy-guard.js';
-      packageJson.scripts['dev:node'] = packageJson.scripts.dev
-        ? packageJson.scripts.dev.replace('cd server && pnpm dev', 'cd server && pnpm dev:node')
-        : 'cd server && pnpm dev:node';
+      packageJson.scripts['dev:node'] = 'node scripts/run-dev.js --node';
     }
     
     await writeFile(rootPackageJsonPath, JSON.stringify(packageJson, null, 2));

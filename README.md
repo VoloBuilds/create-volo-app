@@ -43,6 +43,8 @@ npx create-volo-app my-app
 cd my-app
 pnpm run dev
 ```
+Run **`pnpm run dev` from the project root** — this is the supported way to develop. It starts the UI, API, embedded database, and Firebase Auth emulator together and assigns ports automatically. You do not need to run `ui` and `server` separately.
+
 - **Zero authentication required**
 - **Working app in 30 seconds**
 - All services running locally
@@ -159,6 +161,8 @@ npx create-volo-app --connect            # show status
 
 ## Local Services
 
+Start everything with **`pnpm run dev` from the project root**. Avoid running `ui` and `server` in separate terminals unless you have a specific reason.
+
 Your local development environment includes:
 
 - **Database**: Embedded PostgreSQL at `./data/postgres`
@@ -166,17 +170,27 @@ Your local development environment includes:
 - **Frontend**: `http://localhost:5501` (5500-block; root `pnpm run dev` assigns ports automatically)
 - **API**: `http://localhost:5500`
 
-All data persists locally between development sessions in the `data` folder within your project
+All data persists locally between development sessions in the `data` folder within your project.
+
+**After Cloudflare deploy is connected** (`pnpm connect:deploy` or scaffold with `--deploy`), root `pnpm run dev` switches to **Wrangler dev** and does **not** start embedded PostgreSQL. To keep using the local embedded database, run **`pnpm dev:node`** instead (added to the project when deploy is connected).
+
+**Advanced:** If you run the UI and API separately, set `VITE_API_URL` in `ui/.env.local` to point at your API (for example `http://localhost:5500`). The root dev script handles this for you.
 
 ## Production Deployment
 
 From the project root (after `pnpm connect:deploy` or scaffolding with `--deploy`):
 
+**Local dev after deploy connect:** `pnpm run dev` auto-detects Wrangler (Workers runtime) and expects a remote `DATABASE_URL` — embedded PostgreSQL is not started. Use **`pnpm dev:node`** for Node.js dev with the embedded database.
+
 ```bash
 pnpm run deploy
 ```
 
-This deploys the API Worker first, detects the Worker URL, writes `ui/.env.production`, then deploys the UI static assets Worker.
+This deploys the API Worker first, detects the Worker URL, writes `ui/.env.production`, then deploys the UI static assets Worker. The UI deploys as a separate Cloudflare Worker; under the hood that step runs `pnpm run build && wrangler deploy`, uploading `ui/dist` as Workers Static Assets.
+
+**Add your Workers domain to Firebase:**
+- Go to Firebase Console → Authentication → Settings → Authorized domains
+- Add your `*.workers.dev` domain (or your custom domain)
 
 ### Backend secrets (Cloudflare Workers)
 
@@ -188,20 +202,6 @@ wrangler secret put DATABASE_URL
 ```
 
 You can also set variables in the Cloudflare dashboard under Workers → your Worker → Settings → Variables.
-
-### Frontend (Workers Static Assets)
-
-The UI deploys as a separate Cloudflare Worker with static assets. Root `pnpm run deploy` handles both API and UI in the correct order.
-
-```bash
-pnpm run deploy
-```
-
-Under the hood the UI step runs `pnpm run build && wrangler deploy`, uploading `ui/dist` as Workers Static Assets.
-
-**Add your Workers domain to Firebase:**
-- Go to Firebase Console → Authentication → Settings → Authorized domains
-- Add your `*.workers.dev` domain (or your custom domain)
 
 ### Automated Deployment
 

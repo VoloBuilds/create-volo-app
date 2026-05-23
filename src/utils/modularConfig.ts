@@ -147,31 +147,6 @@ export async function writeLocalUiEnv(
   logger.debug('Generated ui/.env.local with local dev configuration');
 }
 
-export async function writeProductionApiUrl(directory: string, apiUrl: string): Promise<void> {
-  const envPath = path.join(directory, 'ui', '.env.production');
-  const line = `VITE_API_URL=${apiUrl}`;
-
-  await fs.ensureDir(path.dirname(envPath));
-
-  if (!(await fs.pathExists(envPath))) {
-    await fs.writeFile(envPath, `# Production API URL\n${line}\n`);
-    logger.debug('Wrote production API URL to ui/.env.production');
-    return;
-  }
-
-  const content = await fs.readFile(envPath, 'utf-8');
-  const regex = /^VITE_API_URL=.*$/m;
-
-  if (regex.test(content)) {
-    await fs.writeFile(envPath, content.replace(regex, line));
-  } else {
-    const trimmed = content.trimEnd();
-    await fs.writeFile(envPath, `${trimmed}${trimmed ? '\n' : ''}${line}\n`);
-  }
-
-  logger.debug('Wrote production API URL to ui/.env.production');
-}
-
 /**
  * Generates `ui/wrangler.toml` from the template and adds deploy scripts +
  * wrangler devDependency to `ui/package.json`.  Shared by both initial app

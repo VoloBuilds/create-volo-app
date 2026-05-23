@@ -19,7 +19,11 @@ export async function askToStartDevelopmentServer(configData?: VoloConfig): Prom
 }
 
 export async function askToProceedWithAuthentication(needsAuth: string[], configData?: VoloConfig): Promise<boolean> {
-  if (configData) return true;
+  if (configData) {
+    throw new Error(
+      'Pre-authenticate Firebase/Neon/Supabase/Wrangler before running with --config, or provide connection strings / existing project IDs in volo-config.json.'
+    );
+  }
 
   logger.newLine();
   console.log(chalk.yellow.bold('🔐 Authentication Required'));

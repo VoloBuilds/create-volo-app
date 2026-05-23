@@ -271,10 +271,10 @@ async function selectOrCreateProject(
       );
     }
 
-    resolveExistingDatabaseProject(projects, configProjectName, 'Supabase');
-    throw new Error(
-      'database.connectionString is required in config mode when database.action is "existing". Add the pooled Supabase connection string to volo-config.json.'
-    );
+    logger.info('Using existing Supabase project (from config)...');
+    const selected = resolveExistingDatabaseProject(projects, configProjectName, 'Supabase');
+    const password = await promptForPassword(selected.id, fastMode);
+    return { project: selected, password };
   }
 
   // Interactive mode with existing projects

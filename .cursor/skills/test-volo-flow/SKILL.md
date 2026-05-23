@@ -91,6 +91,9 @@ These files must exist in the template. Do not remove or rename them without upd
 - `ui/platforms/cloudflare/wrangler.toml.template`
 - `ui/src/lib/firebase-config.template.json`
 - `scripts/post-setup.js`
+- `scripts/run-dev.js`
+- `scripts/deploy-guard.js`
+- `scripts/parse-wrangler-deploy-url.js`
 - `server/package.json` (must include `dev`, `deploy`, `deploy:cf` scripts)
 
 Local template copy excludes: `node_modules/`, `.git/`, `dist/`, `.next/`, `data/`.

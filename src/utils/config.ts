@@ -118,6 +118,12 @@ export function validateConfigForNonInteractive(config: VoloConfig): void {
       'volo-config.json must include "projectName" for non-interactive setup.'
     );
   }
+
+  if (config.database && !config.database.action) {
+    throw new Error(
+      'volo-config.json must include database.action ("create" or "existing") when database is configured.'
+    );
+  }
 }
 
 interface CreateOptionsLike {

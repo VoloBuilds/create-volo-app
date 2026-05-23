@@ -217,27 +217,41 @@ async function checkDatabaseStatus(projectPath: string) {
 }
 
 async function checkDeploymentStatus(projectPath: string) {
-  const wranglerPath = path.join(projectPath, 'server', 'wrangler.toml');
-  
-  if (!existsSync(wranglerPath)) {
+  const serverWranglerPath = path.join(projectPath, 'server', 'wrangler.toml');
+  const uiWranglerPath = path.join(projectPath, 'ui', 'wrangler.toml');
+  const uiPackageJsonPath = path.join(projectPath, 'ui', 'package.json');
+
+  const hasServerWrangler = existsSync(serverWranglerPath);
+  const hasUiWrangler = existsSync(uiWranglerPath);
+
+  if (!hasServerWrangler && !hasUiWrangler) {
     return { status: 'not_configured', mode: 'local' };
   }
-  
+
+  let hasDeployScript = false;
+  if (existsSync(uiPackageJsonPath)) {
+    try {
+      const packageJson = JSON.parse(await readFile(uiPackageJsonPath, 'utf-8'));
+      hasDeployScript = Boolean(packageJson.scripts?.deploy);
+    } catch {
+      hasDeployScript = false;
+    }
+  }
+
+  if (!hasDeployScript) {
+    return { status: 'partial', mode: 'incomplete' };
+  }
+
   try {
+    const wranglerPath = hasServerWrangler ? serverWranglerPath : uiWranglerPath;
     const wranglerContent = await readFile(wranglerPath, 'utf-8');
     const nameMatch = wranglerContent.match(/name\s*=\s*["']([^"']+)["']/);
-    const accountMatch = wranglerContent.match(/account_id\s*=\s*["']([^"']+)["']/);
-    
-    if (nameMatch && accountMatch) {
-      return {
-        status: 'production',
-        mode: 'cloudflare',
-        workerName: nameMatch[1],
-        accountId: accountMatch[1]
-      };
-    } else {
-      return { status: 'partial', mode: 'incomplete' };
-    }
+
+    return {
+      status: 'production',
+      mode: 'cloudflare',
+      workerName: nameMatch?.[1]
+    };
   } catch (error) {
     return { status: 'error', mode: 'invalid', error: error instanceof Error ? error.message : String(error) };
   }
