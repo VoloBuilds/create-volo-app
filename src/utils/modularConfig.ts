@@ -22,8 +22,8 @@ export async function generateModularConfigFiles(
   // Generate Firebase configuration
   await generateModularFirebaseConfig(directory, config, connectionFlags);
   
-  // Generate UI environment for emulator settings
-  await generateModularUIEnv(directory, config, connectionFlags);
+  // Generate UI environment for local dev
+  await writeLocalUiEnv(directory, config, connectionFlags);
   
   // Generate wrangler configs only if deployment is connected
   if (connectionFlags.deploy) {
@@ -66,9 +66,11 @@ async function generateModularServerEnv(
   envContent += `# Allow anonymous users (server will accept anonymous Firebase tokens)\n`;
   envContent += `ALLOW_ANONYMOUS_USERS=${config.firebase.allowAnonymous ? 'true' : 'false'}\n\n`;
   
-  // Environment setting
-  envContent += `# Environment\n`;
-  envContent += `NODE_ENV=development\n`;
+  // Environment setting (local development only)
+  if (!connectionFlags.auth) {
+    envContent += `# Environment\n`;
+    envContent += `NODE_ENV=development\n`;
+  }
   
   await fs.ensureDir(path.dirname(envPath));
   await fs.writeFile(envPath, envContent);
@@ -113,7 +115,7 @@ async function generateModularFirebaseConfig(
   logger.debug(`Generated Firebase config for ${connectionFlags.auth ? 'production' : 'local emulator'}`);
 }
 
-async function generateModularUIEnv(
+export async function writeLocalUiEnv(
   directory: string, 
   config: ProjectConfig, 
   connectionFlags: ConnectionFlags
@@ -128,25 +130,30 @@ async function generateModularUIEnv(
     envContent += `VITE_USE_FIREBASE_EMULATOR=false\n\n`;
   } else {
     envContent += `# Local Firebase Auth (emulator)\n`;
-    envContent += `VITE_USE_FIREBASE_EMULATOR=true\n\n`;
+    envContent += `VITE_USE_FIREBASE_EMULATOR=true\n`;
+    envContent += `VITE_FIREBASE_AUTH_EMULATOR_PORT=5503\n\n`;
   }
   
   // Anonymous user configuration
   envContent += `# Allow anonymous users to access app without authentication\n`;
   envContent += `VITE_ALLOW_ANONYMOUS_USERS=${config.firebase.allowAnonymous ? 'true' : 'false'}\n\n`;
   
-  // API URL setting
-  if (connectionFlags.deploy) {
-    envContent += `# Production API URL (will be set during deployment)\n`;
-    envContent += `# VITE_API_URL=https://${config.cloudflare.workerName}.YOUR_SUBDOMAIN.workers.dev\n\n`;
-  } else {
-    envContent += `# Local API URL\n`;
-    envContent += `VITE_API_URL=http://localhost:8787\n\n`;
-  }
+  // Local API URL — never write production workers.dev URL here
+  envContent += `# Local API URL\n`;
+  envContent += `VITE_API_URL=http://localhost:5500\n\n`;
   
   await fs.ensureDir(path.dirname(envPath));
   await fs.writeFile(envPath, envContent);
-  logger.debug('Generated ui/.env.local with modular configuration');
+  logger.debug('Generated ui/.env.local with local dev configuration');
+}
+
+export async function writeProductionApiUrl(directory: string, apiUrl: string): Promise<void> {
+  const envPath = path.join(directory, 'ui', '.env.production');
+  const envContent = `# Production API URL\nVITE_API_URL=${apiUrl}\n`;
+
+  await fs.ensureDir(path.dirname(envPath));
+  await fs.writeFile(envPath, envContent);
+  logger.debug(`Wrote production API URL to ui/.env.production`);
 }
 
 /**

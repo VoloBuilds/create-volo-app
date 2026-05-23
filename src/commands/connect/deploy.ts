@@ -10,7 +10,7 @@ import {
   confirmReconfiguration
 } from './shared.js';
 import { parseEnvFile } from '../../utils/env.js';
-import { generateUICloudflareConfig } from '../../utils/modularConfig.js';
+import { generateUICloudflareConfig, writeLocalUiEnv } from '../../utils/modularConfig.js';
 
 export async function connectDeploy(projectPath: string): Promise<void> {
   const rl = createReadlineInterface();
@@ -64,6 +64,36 @@ export async function connectDeploy(projectPath: string): Promise<void> {
     await updateWranglerConfig(projectPath, { workerName: cloudflareResult.workerName });
     await generateUICloudflareConfig(projectPath, cloudflareResult.workerName);
     console.log(chalk.green('✅ UI wrangler configuration and package.json updated'));
+
+    // Refresh local dev env — production URL is written on first `pnpm run deploy`
+    const envPath = path.join(projectPath, 'server', '.env');
+    let envVars: Record<string, string> = {};
+    if (existsSync(envPath)) {
+      envVars = parseEnvFile(await readFile(envPath, 'utf-8'));
+    }
+    const hasProductionAuth = Boolean(
+      envVars.FIREBASE_PROJECT_ID && envVars.FIREBASE_PROJECT_ID !== 'demo-project'
+    );
+    await writeLocalUiEnv(
+      projectPath,
+      {
+        name: '',
+        serviceSlug: '',
+        directory: projectPath,
+        firebase: {
+          projectId: envVars.FIREBASE_PROJECT_ID || 'demo-project',
+          apiKey: '',
+          messagingSenderId: '',
+          appId: '',
+          measurementId: '',
+          allowAnonymous: envVars.ALLOW_ANONYMOUS_USERS !== 'false',
+        },
+        database: { url: envVars.DATABASE_URL || '', provider: 'other' },
+        cloudflare: { workerName: cloudflareResult.workerName },
+      },
+      { auth: hasProductionAuth, database: false, deploy: true }
+    );
+    console.log(chalk.green('✅ Local dev environment refreshed (ui/.env.local)'));
     
     // Update package.json scripts for Cloudflare development
     await updatePackageJsonForCloudflare(projectPath);
@@ -76,11 +106,11 @@ export async function connectDeploy(projectPath: string): Promise<void> {
     
     console.log(chalk.green('\n🎉 Production deployment setup completed!'));
     console.log(chalk.cyan('\n📋 Next steps:'));
-    console.log(`   1. Deploy both: pnpm run deploy (from root)`);
-    console.log('   2. Or deploy individually:');
+    console.log(`   1. Deploy both: pnpm run deploy (from root — creates ui/.env.production automatically)`);
+    console.log('   2. Local dev always uses the local backend: pnpm run dev');
+    console.log('   3. Or deploy individually:');
     console.log('      - API:  pnpm --filter server run deploy');
-    console.log('      - UI:   pnpm --filter ui run deploy');
-    console.log('   3. Update your frontend environment variables with production values');
+    console.log('      - UI:   pnpm --filter ui run deploy (requires ui/.env.production)');
     console.log('   4. Test your production deployment thoroughly');
     
     console.log(chalk.blue('\n🔧 Useful commands:'));
@@ -165,8 +195,8 @@ function generateVarsSection(envVars: Record<string, string>): string {
   
   sortedKeys.forEach(key => {
     const value = envVars[key];
-    // Skip empty values, NODE_ENV (not needed in CF Workers), and RUNTIME (already handled above)
-    if (value && key !== 'NODE_ENV' && key !== 'RUNTIME') {
+    // Skip empty values, dev-only keys, and RUNTIME (already handled above)
+    if (value && key !== 'NODE_ENV' && key !== 'RUNTIME' && key !== 'FIREBASE_AUTH_EMULATOR_HOST' && key !== 'USE_FIREBASE_EMULATOR') {
       // Escape quotes in values
       const escapedValue = value.replace(/"/g, '\\"');
       varsSection += `${key} = "${escapedValue}"\n`;
@@ -208,7 +238,7 @@ async function updatePackageJsonForCloudflare(projectPath: string) {
     const packageJson = JSON.parse(await readFile(rootPackageJsonPath, 'utf-8'));
     
     if (packageJson.scripts) {
-      packageJson.scripts['deploy'] = 'pnpm --filter server run deploy && pnpm --filter ui run deploy';
+      packageJson.scripts['deploy'] = 'node scripts/deploy-guard.js';
       packageJson.scripts['dev:node'] = packageJson.scripts.dev
         ? packageJson.scripts.dev.replace('cd server && pnpm dev', 'cd server && pnpm dev:node')
         : 'cd server && pnpm dev:node';
@@ -295,7 +325,11 @@ function showDeploymentInstructions() {
   console.log('Both your API and frontend deploy as Cloudflare Workers.\n');
   
   console.log(chalk.blue('📋 Deploy commands:'));
+  console.log('  Deploy both:  pnpm run deploy (from root)');
+  console.log('    → deploys API, writes ui/.env.production, then deploys UI');
   console.log('  Deploy API:   pnpm --filter server run deploy');
-  console.log('  Deploy UI:    pnpm --filter ui run deploy');
-  console.log('  Deploy both:  pnpm run deploy (from root)\n');
+  console.log('  Deploy UI:    pnpm --filter ui run deploy\n');
+  console.log(chalk.gray('Local dev (pnpm run dev) always uses ui/.env.local / dynamic ports.'));
+  console.log(chalk.gray('Override production API: edit ui/.env.production'));
+  console.log(chalk.gray('Override local API: edit ui/.env.local'));
 }

@@ -456,7 +456,13 @@ function verifyStructure() {
 
 function verifyBuilds() {
   runCommand(['pnpm', '--dir', TEST_DIR, 'install']);
-  runCommand(['pnpm', '--dir', path.join(TEST_DIR, 'ui'), 'run', 'build']);
+  // Local-only scaffolds have no ui/.env.production until deploy; inject a prod URL for build smoke test.
+  runCommand(['pnpm', '--dir', path.join(TEST_DIR, 'ui'), 'run', 'build'], {
+    env: {
+      ...testEnv(),
+      VITE_API_URL: 'https://volo-flow-test-api.example.workers.dev',
+    },
+  });
   runCommand(['pnpm', '--dir', path.join(TEST_DIR, 'server'), 'exec', 'tsc', '--noEmit']);
 }
 
