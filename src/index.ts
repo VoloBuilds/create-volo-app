@@ -134,12 +134,18 @@ Examples:
 
         const skipPrereqs = configData?.options?.skipPrereqs === true;
         if (!skipPrereqs) {
-          await checkPrerequisites({
+          const prereqResult = await checkPrerequisites({
             autoInstall: !!options.fast || !!configData,
             fastMode: options.fast || !!configData,
             productionMode: !!(options.auth || options.database || options.deploy || options.full),
-            databasePreference: typeof options.database === 'string' ? options.database : undefined
+            databasePreference: typeof options.database === 'string' ? options.database : undefined,
+            includeDeployPrerequisites: !!(options.deploy || options.full)
           });
+
+          // Carry the database choice from prerequisites into the create flow
+          if (prereqResult.databasePreference && typeof options.database !== 'string') {
+            options.database = prereqResult.databasePreference;
+          }
         }
 
         // Create the app

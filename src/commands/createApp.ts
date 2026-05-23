@@ -108,23 +108,12 @@ export async function createApp(
   if (needsAuthentication) {
     logger.newLine();
     
-    // Determine which services need authentication
-    const servicesToAuthenticate = [];
-    if (connectionFlags.database) {
-      const databaseProvider = getDatabaseProvider(options);
-      if (databaseProvider) servicesToAuthenticate.push(databaseProvider);
-    }
-    if (connectionFlags.auth) servicesToAuthenticate.push('firebase');
-    if (connectionFlags.deploy) {
-      const deployProvider = getDeployProvider(options);
-      servicesToAuthenticate.push(deployProvider);
-    }
+    const databaseProvider = getDatabaseProvider(options);
     
     console.log(chalk.blue('🔐 Authenticating with selected production services...'));
     
-    // Use the first service for auth status check (they share auth state)
-    const authStatus = await checkAuthenticationStatus(servicesToAuthenticate[0] || 'firebase');
-    await handleBatchAuthentication(authStatus, servicesToAuthenticate[0] || 'firebase', configData);
+    const authStatus = await checkAuthenticationStatus(databaseProvider);
+    await handleBatchAuthentication(authStatus, databaseProvider, configData);
   }
 
   // Step 4: Setup services (mix of production and local)

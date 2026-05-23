@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import ora from 'ora';
 import { logger } from '../../utils/logger.js';
-import { execFirebase, execPnpm } from '../../utils/cli.js';
+import { execFirebase, execWrangler } from '../../utils/cli.js';
 import { execNeonctl } from '../../utils/neonctl.js';
 import { AuthStatus } from '../shared/types.js';
 import { askToProceedWithAuthentication } from '../shared/prompts.js';
@@ -30,7 +30,7 @@ export async function checkAuthenticationStatus(databaseProvider?: string): Prom
       // This command will fail with an error message if not authenticated, instead of hanging
       const { stdout, stderr } = await execNeonctl(['projects', 'list'], { 
         stdio: 'pipe', 
-        timeout: 5000 // 5 second timeout
+        timeout: 15000
       });
       
       // If the command succeeds, user is authenticated
@@ -61,8 +61,7 @@ export async function checkAuthenticationStatus(databaseProvider?: string): Prom
 
   // Check Cloudflare auth
   try {
-    const { execa } = await import('execa');
-    const { stdout } = await execa('wrangler', ['whoami'], { stdio: 'pipe' });
+    const { stdout } = await execWrangler(['whoami'], { stdio: 'pipe' });
     status.cloudflare = stdout.includes('@') || stdout.includes('You are logged in');
   } catch {
     status.cloudflare = false;
@@ -142,8 +141,7 @@ export async function handleBatchAuthentication(
           console.log(chalk.white('A browser tab will open for you to sign in to your Cloudflare account.'));
           logger.newLine();
           
-          const { execa } = await import('execa');
-          await execa('wrangler', ['login'], { stdio: 'inherit', timeout: 300000 });
+          await execWrangler(['login'], { stdio: 'inherit', timeout: 300000 });
           
           console.log(chalk.green(`✅ ${service} authentication completed`));
           break;

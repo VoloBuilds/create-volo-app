@@ -118,7 +118,7 @@ async function isNeonAuthenticated(): Promise<boolean> {
   try {
     // Check authentication by trying to list projects
     // This doesn't trigger browser login like 'me' command does
-    await execNeonctl(['projects', 'list'], { stdio: 'pipe', timeout: 5000 });
+    await execNeonctl(['projects', 'list'], { stdio: 'pipe', timeout: 15000 });
     return true;
   } catch (error) {
     logger.debug(`Neon authentication check failed: ${error}`);

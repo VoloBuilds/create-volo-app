@@ -18,7 +18,10 @@ export interface PrerequisiteOptions {
   databasePreference?: string;
   fastMode?: boolean;
   productionMode?: boolean;
+  includeDeployPrerequisites?: boolean;
 }
+
+export type CliInstallResult = 'global' | 'local' | false;
 
 export interface PrerequisiteResult {
   status: 'ok' | 'missing' | 'outdated' | 'installed_locally';

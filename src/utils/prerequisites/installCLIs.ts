@@ -1,10 +1,10 @@
 import { execa } from 'execa';
 import semver from 'semver';
 import ora from 'ora';
-import type { Prerequisite, PrerequisiteResult } from './types.js';
+import type { CliInstallResult, Prerequisite, PrerequisiteResult } from './types.js';
 import { logger } from '../logger.js';
 
-export async function installCliTool(prereq: Prerequisite, global: boolean = false): Promise<boolean> {
+export async function installCliTool(prereq: Prerequisite, global: boolean = false): Promise<CliInstallResult> {
   if (!prereq.npmPackage) {
     return false;
   }
@@ -23,7 +23,7 @@ export async function installCliTool(prereq: Prerequisite, global: boolean = fal
     });
     
     spinner.succeed(`${prereq.name} installed ${installType}`);
-    return true;
+    return global ? 'global' : 'local';
   } catch (error) {
     // If global install fails due to permissions, suggest local install
     if (global && error instanceof Error && (error.message.includes('EACCES') || error.message.includes('permission denied'))) {
@@ -45,7 +45,7 @@ export async function installCliTool(prereq: Prerequisite, global: boolean = fal
             cwd: process.cwd()
           });
           localSpinner.succeed(`${prereq.name} installed locally (global permissions unavailable)`);
-          return true;
+          return 'local';
         } catch (localError) {
           localSpinner.fail(`${prereq.name} local installation also failed`);
           logger.debug(`Local installation error: ${localError}`);

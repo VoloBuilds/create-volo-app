@@ -211,7 +211,7 @@ export async function execPnpm(
   }
 
   // Try to install pnpm globally first, then locally if that fails
-  let pnpmInstalled = false;
+  let pnpmInstalled: 'global' | 'local' | false = false;
 
   try {
     pnpmInstalled = await installCliTool(pnpmPrereq, true); // Try global install
