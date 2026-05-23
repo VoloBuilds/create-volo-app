@@ -2,10 +2,13 @@ import inquirer from 'inquirer';
 import path from 'path';
 import fs from 'fs-extra';
 import { logger } from '../../utils/logger.js';
+import { deriveServiceSlug } from '../../utils/validation.js';
 import type { VoloConfig } from '../../utils/config.js';
 
 interface ProjectInfo {
   name: string;
+  /** Lowercase-hyphenated slug derived from name — use for cloud resource defaults. */
+  serviceSlug: string;
   directory: string;
   isCurrentDirectory: boolean;
 }
@@ -18,8 +21,9 @@ export async function getProjectName(provided?: string, configData?: VoloConfig)
   if (provided) {
     const resolved = path.resolve(provided);
     const name = path.basename(resolved);
+    const serviceSlug = deriveServiceSlug(name);
     const isCurrentDirectory = resolved === path.resolve();
-    return { name, directory: resolved, isCurrentDirectory };
+    return { name, serviceSlug, directory: resolved, isCurrentDirectory };
   }
 
   const { input } = await inquirer.prompt([
@@ -39,8 +43,28 @@ export async function getProjectName(provided?: string, configData?: VoloConfig)
 
   const resolved = path.resolve(input);
   const name = path.basename(resolved);
+  const serviceSlug = deriveServiceSlug(name);
   const isCurrentDirectory = resolved === path.resolve();
-  return { name, directory: resolved, isCurrentDirectory };
+  return { name, serviceSlug, directory: resolved, isCurrentDirectory };
+}
+
+function assertConfigOverwriteAllowed(
+  configData: VoloConfig,
+  targetLabel: string,
+  targetPath: string
+): void {
+  if (configData.options?.overwrite === true) {
+    logger.warning(
+      `${targetLabel} "${targetPath}" already exists — overwriting (options.overwrite is true).`
+    );
+    return;
+  }
+
+  throw new Error(
+    `${targetLabel} "${targetPath}" already exists and would be overwritten.\n` +
+      'Config mode refuses to overwrite unless you set options.overwrite to true in volo-config.json.\n' +
+      'Remove the target directory first, or add: "options": { "overwrite": true }'
+  );
 }
 
 export async function validateAndPrepareDirectory(directory: string, isCurrentDirectory: boolean = false, configData?: VoloConfig): Promise<string> {
@@ -54,42 +78,48 @@ export async function validateAndPrepareDirectory(directory: string, isCurrentDi
     );
 
     if (significantFiles.length > 0) {
-      const overwrite = configData
-        ? true
-        : (await inquirer.prompt([
-            {
-              type: 'confirm',
-              name: 'overwrite',
-              message: `Current directory is not empty. Do you want to continue and potentially overwrite existing files?`,
-              default: false
-            }
-          ])).overwrite;
+      if (configData) {
+        assertConfigOverwriteAllowed(configData, 'Current directory', directory);
+      } else {
+        const { overwrite } = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'overwrite',
+            message: `Current directory is not empty. Do you want to continue and potentially overwrite existing files?`,
+            default: false
+          }
+        ]);
 
-      if (!overwrite) {
-        logger.info('Operation cancelled.');
-        throw new Error('Directory is not empty');
+        if (!overwrite) {
+          logger.info('Operation cancelled.');
+          throw new Error('Directory is not empty');
+        }
       }
     }
   } else {
     if (await fs.pathExists(directory)) {
       const displayName = path.basename(directory);
-      const overwrite = configData
-        ? true
-        : (await inquirer.prompt([
-            {
-              type: 'confirm',
-              name: 'overwrite',
-              message: `Directory "${displayName}" already exists. Do you want to overwrite it?`,
-              default: false
-            }
-          ])).overwrite;
 
-      if (!overwrite) {
-        logger.info('Operation cancelled.');
-        throw new Error('Directory already exists');
+      if (configData) {
+        assertConfigOverwriteAllowed(configData, 'Directory', directory);
+        await fs.remove(directory);
+      } else {
+        const { overwrite } = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'overwrite',
+            message: `Directory "${displayName}" already exists. Do you want to overwrite it?`,
+            default: false
+          }
+        ]);
+
+        if (!overwrite) {
+          logger.info('Operation cancelled.');
+          throw new Error('Directory already exists');
+        }
+
+        await fs.remove(directory);
       }
-
-      await fs.remove(directory);
     }
   }
 

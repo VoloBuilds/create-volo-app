@@ -119,7 +119,35 @@ npx create-volo-app my-app --config ./volo-config.json
 npx create-volo-app --init-config
 ```
 
-> **Note:** If your `volo-config.json` contains a database connection string or other secrets, add it to `.gitignore` to avoid committing credentials to version control.
+## Upgrading from older CLI flags
+
+These flags were removed; Commander no longer accepts them. If a script still passes one, the CLI exits with a migration hint.
+
+| Removed | Use instead |
+| ------- | ----------- |
+| `--status --path ./app` | `cd ./app` then `npx create-volo-app --connect` |
+| `--path <dir>` | `cd` into the project (connect mode uses cwd) |
+| `--branch dev` | `--template <url>#dev` |
+| `--db neon` | `--database neon` |
+| `--skip-prereqs` | `"options": { "skipPrereqs": true }` in config |
+| `--install-deps` | `--fast` or `--config` |
+| `--local-template <path>` | `--template <path>` |
+| `--non-interactive` | `--fast` or `--config ./volo-config.json` |
+| `--no-start` | Run `pnpm run dev` after scaffolding |
+
+## Config file (`volo-config.json`)
+
+Use a config file for **non-interactive** or **CI** scaffolding. Pass it explicitly with `--config ./volo-config.json` (a file in the current directory is **not** loaded automatically).
+
+**Do not commit your real config.** Treat `volo-config.json` like `.env`: it often holds database URLs and other secrets. Generated projects include `volo-config.json` in `.gitignore` by default. Safe, committed samples live under [`examples/`](examples/) — copy and edit those locally, or run `--init-config` to generate a new file.
+
+**Examples:** `examples/volo-config.local.json` uses `"template": "/path/to/volo-app"` as a placeholder — set `options.template` to your local volo-app checkout before use. `pnpm test:volo-flow` ignores that value and passes `--template` (default `../volo-app`, or set `VOLO_APP_TEMPLATE`).
+
+**CI:** Build the config in the job (env vars, secret manager, or a short script), run `create-volo-app` with `--config`, and do not persist the file as a repo artifact unless your pipeline stores secrets securely.
+
+**Overwrite:** Config mode refuses to replace an existing project directory unless you set `"options": { "overwrite": true }`.
+
+**Naming:** The CLI path / folder name can be any valid directory name (spaces, underscores, etc.). When auto-creating cloud resources (Cloudflare worker names, Neon/Supabase project names, Firebase project IDs), the CLI derives a lowercase-hyphen slug from the basename and sanitizes it for each provider. Lookup of `database.action: "existing"` projects uses the literal `projectName` value from config — no sanitization — so it matches the exact cloud project name or ID you specify.
 
 ```bash
 
@@ -214,6 +242,8 @@ pnpm test:volo-flow:cleanup      # remove .tmp/volo-flow-test artifacts
 ```
 
 Set `VOLO_APP_TEMPLATE` to point at a non-default template path. Use `--force` to replace an existing test dir: `pnpm test:volo-flow -- --force`.
+
+**Dev log contract:** `test:volo-flow:dev` waits for `VOLO_DEV_FRONTEND_URL` and `VOLO_DEV_BACKEND_URL`, verifies backend health, and captures service logs to `.tmp/volo-flow-test.dev.log`. On failure it prints a log excerpt. If you change those lines in volo-app `scripts/run-dev.js`, update `scripts/test-volo-flow.mjs` here.
 
 ## Support
 

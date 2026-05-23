@@ -9,7 +9,7 @@
   "database": {
     "provider": "neon",
     "action": "existing",
-    "connectionString": "postgresql://user:pass@host/db"
+    "projectName": "my-neon-project"
   },
   "deploy": {
     "workerName": "my-app-api"

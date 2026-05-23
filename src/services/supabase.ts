@@ -5,6 +5,7 @@ import ora from 'ora';
 import { logger } from '../utils/logger.js';
 import { execSupabase } from '../utils/cli.js';
 import type { VoloConfig } from '../utils/config.js';
+import { resolveExistingDatabaseProject, sanitizeProjectName } from '../utils/validation.js';
 
 interface DatabaseConfig {
   url: string;
@@ -228,12 +229,16 @@ async function promptForPassword(projectRef: string, fastMode = false): Promise<
 
 async function selectOrCreateProject(
   fastMode: boolean,
-  projectName?: string,
+  serviceSlug?: string,
   configAction?: 'create' | 'existing',
   configProjectName?: string
 ): Promise<{ project: SupabaseProject; password: string } | null> {
   const projects = await listSupabaseProjects();
-  const defaultProjectName = configProjectName || `${projectName || 'volo-app'}-db`;
+  // For create: sanitize the name before submitting to Supabase API
+  // For existing: configProjectName is used as-is (literal lookup via resolveExistingDatabaseProject)
+  const defaultProjectName = configProjectName
+    ? sanitizeProjectName(configProjectName) || sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`)
+    : sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`);
 
   const shouldCreate = configAction === 'create' || fastMode || projects.length === 0;
   const shouldSelectExisting = configAction === 'existing' && projects.length > 0;
@@ -257,6 +262,19 @@ async function selectOrCreateProject(
       project: newProject,
       password: newProject.dbPassword!
     };
+  }
+
+  if (configAction === 'existing') {
+    if (projects.length === 0) {
+      throw new Error(
+        'database.action is "existing" but no Supabase projects were found. Use action "create" or create a project in the Supabase console first.'
+      );
+    }
+
+    logger.info('Using existing Supabase project (from config)...');
+    const project = resolveExistingDatabaseProject(projects, configProjectName, 'Supabase');
+    const password = await promptForPassword(project.id, fastMode);
+    return { project, password };
   }
 
   // Interactive mode with existing projects
@@ -286,12 +304,13 @@ async function selectOrCreateProject(
   ]);
 
   if (selectedProject === 'new') {
+    const sanitizedDefault = sanitizeProjectName(`${serviceSlug || 'volo-app'}-db`) || 'volo-app-db';
     const { newProjectName } = await inquirer.prompt([
       {
         type: 'input',
         name: 'newProjectName',
         message: 'Enter a name for your new Supabase project:',
-        default: defaultProjectName,
+        default: sanitizedDefault,
         validate: (input: string) => {
           if (!input.trim()) return 'Project name is required';
           if (input.length > 50) return 'Project name must be 50 characters or less';
@@ -324,7 +343,7 @@ async function selectOrCreateProject(
 
 // === MAIN SETUP FUNCTIONS ===
 
-export async function setupSupabaseDatabase(fastMode = false, projectName?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
+export async function setupSupabaseDatabase(fastMode = false, serviceSlug?: string, configData?: VoloConfig): Promise<DatabaseConfig> {
   logger.info('Setting up Supabase database...');
   logger.newLine();
 
@@ -358,7 +377,7 @@ export async function setupSupabaseDatabase(fastMode = false, projectName?: stri
   spinner.stop();
 
   const dbConfig = configData?.database;
-  const result = await selectOrCreateProject(fastMode, projectName, dbConfig?.action, dbConfig?.projectName);
+  const result = await selectOrCreateProject(fastMode, serviceSlug, dbConfig?.action, dbConfig?.projectName);
   if (!result) {
     logger.warning('Failed to set up project. Using manual setup instead.');
     return await setupSupabaseDatabaseManual();

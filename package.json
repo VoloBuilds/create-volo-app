@@ -1,6 +1,6 @@
 {
   "name": "create-volo-app",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "CLI tool to create AI-ready full-stack apps with an integrated React frontend, Hono backend, Auth, and Postgres database.",
   "type": "module",
   "bin": {

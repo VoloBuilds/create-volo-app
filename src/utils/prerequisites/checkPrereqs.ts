@@ -113,6 +113,22 @@ async function checkPrerequisite(prereq: Prerequisite): Promise<PrerequisiteResu
   }
 }
 
+/**
+ * Whether to run the local-only → global CLI upgrade flow.
+ * - Interactive: offer upgrade (with prompt).
+ * - Fast / config mode: auto-upgrade without prompt.
+ * - autoInstall without fastMode: skip (missing tools handled in the missing-prereq block).
+ */
+function shouldUpgradeLocalClisToGlobal(options: PrerequisiteOptions): boolean {
+  if (options.fastMode) {
+    return true;
+  }
+  if (options.autoInstall) {
+    return false;
+  }
+  return true;
+}
+
 export async function checkPrerequisites(options: PrerequisiteOptions = {}): Promise<CheckPrerequisitesResult> {
   // Fast mode implies auto-install: skip prompts and accept sensible defaults.
   if (options.fastMode) {
@@ -218,8 +234,7 @@ export async function checkPrerequisites(options: PrerequisiteOptions = {}): Pro
     }
 
     // Handle tools that are only available locally but could be installed globally.
-    // In fast mode we still enter this block (autoInstall is true) and auto-upgrade.
-    if (localOnly.length > 0 && (!options.autoInstall || options.fastMode)) {
+    if (localOnly.length > 0 && shouldUpgradeLocalClisToGlobal(options)) {
       logger.newLine();
       console.log(chalk.cyan.bold('🔄 Local Installation Detected'));
       logger.newLine();

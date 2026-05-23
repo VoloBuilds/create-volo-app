@@ -1,12 +1,21 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import inquirer from 'inquirer';
 import Ajv from 'ajv';
 import { logger } from './logger.js';
+import { deriveServiceSlug } from './validation.js';
+
+const require = createRequire(import.meta.url);
+const { version: packageVersion } = require('../../package.json') as { version: string };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+export function getPublishedConfigSchemaUrl(version: string = packageVersion): string {
+  return `https://raw.githubusercontent.com/VoloBuilds/create-volo-app/v${version}/volo-config.schema.json`;
+}
 
 export interface VoloConfig {
   $schema?: string;
@@ -36,6 +45,8 @@ export interface VoloConfig {
     skipPrereqs?: boolean;
     verbose?: boolean;
     template?: string;
+    /** When true, replace an existing target directory in config mode. Defaults to false. */
+    overwrite?: boolean;
   };
 }
 
@@ -99,22 +110,6 @@ export function loadConfig(configPath: string): VoloConfig {
   }
 
   return config;
-}
-
-export function discoverConfig(): string | null {
-  const configPath = path.join(process.cwd(), 'volo-config.json');
-
-  // Safety guard: don't auto-discover if we're in the create-volo-app repo itself
-  const cliMarker = path.join(process.cwd(), 'bin', 'cli.js');
-  if (fs.existsSync(cliMarker)) {
-    return null;
-  }
-
-  if (fs.existsSync(configPath)) {
-    return configPath;
-  }
-
-  return null;
 }
 
 interface CreateOptionsLike {
@@ -181,7 +176,7 @@ export async function generateConfigInteractively(): Promise<void> {
   console.log('');
 
   const config: VoloConfig = {
-    $schema: 'https://raw.githubusercontent.com/VoloBuilds/create-volo-app/main/volo-config.schema.json'
+    $schema: getPublishedConfigSchemaUrl(),
   };
 
   // Project name
@@ -195,6 +190,7 @@ export async function generateConfigInteractively(): Promise<void> {
     }
   ]);
   config.projectName = projectName;
+  const serviceSlug = deriveServiceSlug(projectName);
 
   // Auth setup
   const { setupAuth } = await inquirer.prompt([
@@ -299,7 +295,7 @@ export async function generateConfigInteractively(): Promise<void> {
           type: 'input',
           name: 'dbProjectName',
           message: 'Enter a name for your database project:',
-          default: `${projectName}-db`
+          default: `${serviceSlug}-db`
         }
       ]);
       config.database.projectName = dbProjectName;
@@ -320,6 +316,16 @@ export async function generateConfigInteractively(): Promise<void> {
           }
         ]);
         config.database.connectionString = connectionString;
+      } else {
+        const { dbProjectName } = await inquirer.prompt([
+          {
+            type: 'input',
+            name: 'dbProjectName',
+            message: 'Enter the name or ID of your existing database project:',
+            validate: (input: string) => input.trim() ? true : 'Project name is required'
+          }
+        ]);
+        config.database.projectName = dbProjectName;
       }
     }
   }
@@ -342,7 +348,7 @@ export async function generateConfigInteractively(): Promise<void> {
         type: 'input',
         name: 'workerName',
         message: 'Enter a name for your Cloudflare Worker:',
-        default: `${projectName}-api`
+        default: `${serviceSlug}-api`
       }
     ]);
     config.deploy.workerName = workerName;
@@ -371,6 +377,9 @@ export async function generateConfigInteractively(): Promise<void> {
 
   console.log('');
   logger.success(`Config written to ./volo-config.json`);
+  logger.warning(
+    'This file may contain secrets — do not commit it. Use examples/ for safe samples; in CI, generate the file from injected secrets.'
+  );
   logger.info(`Usage: npx create-volo-app ${config.projectName} --config ./volo-config.json`);
   console.log('');
 }

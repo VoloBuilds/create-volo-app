@@ -135,9 +135,6 @@ export async function downloadTemplate(
     
     onProgress?.(85, 'Preparing template files');
     
-    // Replace README.md with README.template.md for CLI users
-    await replaceReadmeForCli(targetDirectory);
-    
     onProgress?.(90, 'Initializing git repository');
     
     // Initialize a fresh git repository
@@ -273,20 +270,6 @@ async function initializeGitRepo(targetDirectory: string): Promise<void> {
   }
 }
 
-async function replaceReadmeForCli(templatePath: string): Promise<void> {
-  const readmePath = path.join(templatePath, 'README.md');
-  const templateReadmePath = path.join(templatePath, 'README.template.md');
-  
-  // Check if template README exists
-  if (await fs.pathExists(templateReadmePath)) {
-    // Replace the main README with the template version
-    await fs.move(templateReadmePath, readmePath, { overwrite: true });
-    logger.debug('Replaced README.md with template version for CLI users');
-  } else {
-    logger.debug('No README.template.md found, keeping original README.md');
-  }
-}
-
 export async function validateTemplate(templatePath: string): Promise<boolean> {
   // Check if this looks like a valid volo-app template
   const requiredFiles = [
@@ -343,8 +326,8 @@ export async function validateTemplate(templatePath: string): Promise<boolean> {
 
 /**
  * Copies a local template directory into `targetDirectory` and runs the same
- * post-copy pipeline as `downloadTemplate()` (validation, README swap, fresh
- * git init). Skips obvious noise directories (`node_modules`, `.git`, etc.)
+ * post-copy pipeline as `downloadTemplate()` (validation, fresh git init).
+ * Skips obvious noise directories (`node_modules`, `.git`, etc.)
  * so a working repo can be used as a template source during development.
  */
 export async function copyLocalTemplate(
@@ -378,7 +361,6 @@ export async function copyLocalTemplate(
     throw new Error('Invalid template structure. The directory does not appear to be a valid Volo app template.');
   }
 
-  await replaceReadmeForCli(targetDirectory);
   await initializeGitRepo(targetDirectory);
 
   logger.debug('Local template copied successfully');

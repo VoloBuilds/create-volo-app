@@ -2,7 +2,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
 import { logger } from '../utils/logger.js';
-import { validateFirebaseProjectId } from '../utils/validation.js';
+import { validateFirebaseProjectId, sanitizeFirebaseProjectId } from '../utils/validation.js';
 import { execFirebase } from '../utils/cli.js';
 import type { VoloConfig } from '../utils/config.js';
 
@@ -71,7 +71,7 @@ async function checkFirebaseFirstTimeSetup(): Promise<boolean> {
   }
 }
 
-export async function setupFirebase(fastMode = false, projectName?: string, configData?: VoloConfig): Promise<FirebaseConfig> {
+export async function setupFirebase(fastMode = false, serviceSlug?: string, displayName?: string, configData?: VoloConfig): Promise<FirebaseConfig> {
   logger.newLine();
   console.log(chalk.yellow.bold('🔐 Setting up Firebase Authentication'));
   console.log(chalk.white('Firebase handles secure user login/signup for your app.'));
@@ -105,16 +105,16 @@ export async function setupFirebase(fastMode = false, projectName?: string, conf
         logger.info(`Using existing Firebase project from config: ${projectId}`);
       } else {
         // Schema requires projectId when action is 'existing'; defensive fallback
-        projectId = await selectExistingProject(projectName);
+        projectId = await selectExistingProject(serviceSlug);
       }
     } else {
-      // action === 'create'
-      const baseName = authConfig.displayName || projectName || 'volo-app';
-      projectId = await createFirebaseProjectFast(baseName);
+      // action === 'create': use serviceSlug for ID, displayName for human label
+      const humanName = authConfig.displayName || displayName || serviceSlug || 'volo-app';
+      projectId = await createFirebaseProjectFast(serviceSlug || 'volo-app', humanName);
     }
   } else if (fastMode) {
-    // In fast mode, always create a new project with project name
-    projectId = await createFirebaseProjectFast(projectName || 'volo-app');
+    // In fast mode, always create a new project with service slug
+    projectId = await createFirebaseProjectFast(serviceSlug || 'volo-app', displayName || serviceSlug || 'volo-app');
   } else {
     // Choose between creating new project or using existing
     const { action } = await inquirer.prompt([
@@ -130,9 +130,9 @@ export async function setupFirebase(fastMode = false, projectName?: string, conf
     ]);
 
     if (action === 'create') {
-      projectId = await createFirebaseProject(projectName);
+      projectId = await createFirebaseProject(serviceSlug, displayName);
     } else {
-      projectId = await selectExistingProject(projectName);
+      projectId = await selectExistingProject(serviceSlug);
     }
   }
 
@@ -181,7 +181,13 @@ export async function setupFirebase(fastMode = false, projectName?: string, conf
   }
 
   // Create and configure web app
-  const webAppConfig = await createWebApp(projectId, fastMode || isConfigDriven);
+  const webAppDisplayName =
+    authConfig?.displayName || displayName || serviceSlug || 'volo-app';
+  const webAppConfig = await createWebApp(
+    projectId,
+    fastMode || isConfigDriven,
+    webAppDisplayName
+  );
 
   logger.success('Firebase setup completed!');
   logger.newLine();
@@ -192,18 +198,17 @@ export async function setupFirebase(fastMode = false, projectName?: string, conf
   };
 }
 
-async function createFirebaseProjectFast(baseProjectName: string): Promise<string> {
-  // Sanitize project name for Firebase (lowercase, hyphens only)
-  const sanitizedName = baseProjectName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/--+/g, '-').replace(/^-|-$/g, '');
+async function createFirebaseProjectFast(serviceSlug: string, displayName: string): Promise<string> {
+  const sanitizedName = sanitizeFirebaseProjectId(serviceSlug);
   let projectId = sanitizedName;
-  let displayName = baseProjectName;
+  let currentDisplayName = displayName;
   let attempt = 0;
 
   while (attempt < 10) { // Limit attempts to avoid infinite loop
     const spinner = ora(`Creating Firebase project "${projectId}"...`).start();
 
     try {
-      await execFirebase(['projects:create', projectId, '--display-name', displayName]);
+      await execFirebase(['projects:create', projectId, '--display-name', currentDisplayName]);
       spinner.succeed(`Firebase project "${projectId}" created successfully`);
       return projectId;
     } catch (error) {
@@ -217,7 +222,7 @@ async function createFirebaseProjectFast(baseProjectName: string): Promise<strin
       )) {
         attempt++;
         projectId = `${sanitizedName}-${attempt}`;
-        displayName = `${baseProjectName} ${attempt}`;
+        currentDisplayName = `${displayName} ${attempt}`;
         logger.debug(`Project ID "${sanitizedName}" exists, trying "${projectId}"`);
         continue;
       }
@@ -256,10 +261,10 @@ async function createFirebaseProjectFast(baseProjectName: string): Promise<strin
   throw new Error('Failed to create Firebase project after multiple attempts');
 }
 
-async function createFirebaseProject(suggestedName?: string): Promise<string> {
-  // Generate a default project ID suggestion
-  const defaultProjectId = suggestedName 
-    ? suggestedName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/--+/g, '-').replace(/^-|-$/g, '')
+async function createFirebaseProject(serviceSlug?: string, displayName?: string): Promise<string> {
+  // Generate a default project ID suggestion from the service slug
+  const defaultProjectId = serviceSlug
+    ? sanitizeFirebaseProjectId(serviceSlug)
     : 'my-volo-app';
 
   const { projectId } = await inquirer.prompt([
@@ -280,21 +285,21 @@ async function createFirebaseProject(suggestedName?: string): Promise<string> {
     }
   ]);
 
-  const { displayName } = await inquirer.prompt([
+  const { chosenDisplayName } = await inquirer.prompt([
     {
       type: 'input',
-      name: 'displayName',
+      name: 'chosenDisplayName',
       message: 'Enter a display name for your project:',
-      default: projectId
+      default: displayName || projectId
     }
   ]);
 
   try {
-    return await attemptFirebaseProjectCreation(projectId, displayName);
+    return await attemptFirebaseProjectCreation(projectId, chosenDisplayName);
   } catch (error) {
     // If it's a project ID conflict, ask for a new project ID
     if (error instanceof FirebaseProjectIdConflictError) {
-      return await createFirebaseProject(suggestedName);
+      return await createFirebaseProject(serviceSlug, displayName);
     }
     
     // For Terms of Service errors, bubble them up to the retry logic
@@ -543,7 +548,11 @@ async function setupAnonymousAuth(projectId: string, fastMode: boolean): Promise
   logger.newLine();
 }
 
-async function createWebApp(projectId: string, nonInteractive = false): Promise<Omit<FirebaseConfig, 'allowAnonymous'>> {
+async function createWebApp(
+  projectId: string,
+  nonInteractive = false,
+  webAppDisplayName = 'volo-app'
+): Promise<Omit<FirebaseConfig, 'allowAnonymous'>> {
   // First, check if there are existing web apps
   const existingApps = await getExistingWebApps(projectId);
   
@@ -583,12 +592,12 @@ async function createWebApp(projectId: string, nonInteractive = false): Promise<
         ]);
         appId = selectedAppId;
       } else {
-        appId = await createNewWebApp(projectId);
+        appId = await createNewWebApp(projectId, webAppDisplayName);
       }
     }
   } else {
     logger.info('No existing web apps found. Creating a new one...');
-    appId = await createNewWebApp(projectId);
+    appId = await createNewWebApp(projectId, webAppDisplayName);
   }
   
   // Get app configuration
@@ -606,7 +615,7 @@ async function getExistingWebApps(projectId: string): Promise<any[]> {
   }
 }
 
-async function createNewWebApp(projectId: string): Promise<string> {
+async function createNewWebApp(projectId: string, webAppDisplayName = 'volo-app'): Promise<string> {
   const spinner = ora('Creating Firebase web app...').start();
   
   try {
@@ -614,7 +623,7 @@ async function createNewWebApp(projectId: string): Promise<string> {
     const { stdout } = await execFirebase([
       'apps:create', 
       'WEB', 
-      'volo-app',
+      webAppDisplayName,
       '--project', projectId
     ]);
     

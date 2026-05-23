@@ -8,6 +8,9 @@ node_modules/
 dist/
 build/
 
+# Scaffold config (may contain secrets; committed samples live under examples/)
+volo-config.json
+
 # Environment variables
 .env
 .env.local

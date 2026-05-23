@@ -15,6 +15,7 @@ export interface CreateOptions {
 
 export interface ProjectConfig {
   name: string;
+  serviceSlug: string;
   directory: string;
   firebase: {
     projectId: string;

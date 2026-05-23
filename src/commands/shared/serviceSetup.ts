@@ -7,12 +7,12 @@ import { ProjectConfig } from '../shared/types.js';
 import { askToRetrySetup } from '../shared/prompts.js';
 import type { VoloConfig } from '../../utils/config.js';
 
-export async function setupFirebaseWithRetry(maxRetries = 2, fastMode = false, projectName?: string, configData?: VoloConfig): Promise<ProjectConfig['firebase']> {
+export async function setupFirebaseWithRetry(maxRetries = 2, fastMode = false, serviceSlug?: string, displayName?: string, configData?: VoloConfig): Promise<ProjectConfig['firebase']> {
   // In config mode, fail fast: do not retry on errors.
   const effectiveMaxRetries = configData ? 1 : maxRetries;
   for (let attempt = 1; attempt <= effectiveMaxRetries; attempt++) {
     try {
-      return await setupFirebase(fastMode, projectName, configData);
+      return await setupFirebase(fastMode, serviceSlug, displayName, configData);
     } catch (error) {
       // Handle Firebase first-time setup requirement
       if (error instanceof FirebaseFirstTimeSetupError) {
@@ -91,22 +91,22 @@ export async function setupFirebaseWithRetry(maxRetries = 2, fastMode = false, p
   throw new Error('Firebase setup failed');
 }
 
-export async function setupDatabaseWithRetry(databasePreference?: string, maxRetries = 2, fastMode = false, projectName?: string, configData?: VoloConfig): Promise<ProjectConfig['database']> {
+export async function setupDatabaseWithRetry(databasePreference?: string, maxRetries = 2, fastMode = false, serviceSlug?: string, configData?: VoloConfig): Promise<ProjectConfig['database']> {
   // In config mode, fail fast: do not retry on errors.
   const effectiveMaxRetries = configData ? 1 : maxRetries;
   for (let attempt = 1; attempt <= effectiveMaxRetries; attempt++) {
     try {
       switch (databasePreference) {
         case 'neon':
-          return await setupDatabase(databasePreference, fastMode, projectName, configData);
+          return await setupDatabase(databasePreference, fastMode, serviceSlug, configData);
         case 'supabase':
           const { setupSupabaseDatabase } = await import('../../services/supabase.js');
-          return await setupSupabaseDatabase(fastMode, projectName, configData);
+          return await setupSupabaseDatabase(fastMode, serviceSlug, configData);
         case 'other':
           const { setupOtherDatabase } = await import('../../services/database.js');
           return await setupOtherDatabase(configData);
         default:
-          return await setupDatabase(databasePreference, fastMode, projectName, configData);
+          return await setupDatabase(databasePreference, fastMode, serviceSlug, configData);
       }
     } catch (error) {
       logger.warning(`Database setup failed (attempt ${attempt}/${effectiveMaxRetries})`);

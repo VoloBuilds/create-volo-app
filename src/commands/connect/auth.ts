@@ -6,7 +6,7 @@ import { setupFirebaseWithRetry } from '../shared/serviceSetup.js';
 import { 
   createReadlineInterface, 
   question, 
-  getProjectNameFromPackageJson,
+  getProjectNameAndSlugFromPackageJson,
   confirmProductionSetup,
   confirmReconfiguration 
 } from './shared.js';
@@ -56,12 +56,12 @@ export async function connectAuth(projectPath: string): Promise<void> {
     // Backup current configuration
     await backupFirebaseConfig(projectPath);
     
-    // Get project name from package.json for consistent naming
-    const projectName = await getProjectNameFromPackageJson(projectPath);
+    // Get project name and service slug from package.json for consistent naming
+    const { name, serviceSlug } = await getProjectNameAndSlugFromPackageJson(projectPath);
     
     // Use existing Firebase setup with retry logic from services
     console.log(chalk.blue('\n🔐 Setting up Firebase...'));
-    const firebaseResult = await setupFirebaseWithRetry(2, false, projectName);
+    const firebaseResult = await setupFirebaseWithRetry(2, false, serviceSlug, name);
     
     // Convert to our expected format
     const config: FirebaseConfigResult = {

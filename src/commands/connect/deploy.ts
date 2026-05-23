@@ -5,7 +5,7 @@ import path from 'path';
 import { setupCloudflare } from '../../services/cloudflare.js';
 import { 
   createReadlineInterface, 
-  getProjectNameFromPackageJson,
+  getProjectNameAndSlugFromPackageJson,
   confirmProductionSetup,
   confirmReconfiguration
 } from './shared.js';
@@ -53,12 +53,12 @@ export async function connectDeploy(projectPath: string): Promise<void> {
       return;
     }
     
-    // Get project name for default worker naming (consistent with createFull.ts)
-    const projectName = await getProjectNameFromPackageJson(projectPath);
+    // Get service slug for default worker naming
+    const { serviceSlug } = await getProjectNameAndSlugFromPackageJson(projectPath);
     
     // Use existing Cloudflare setup from services (fast mode = false for interactive setup)
     console.log(chalk.blue('\n🔐 Setting up Cloudflare...'));
-    const cloudflareResult = await setupCloudflare(projectName, false);
+    const cloudflareResult = await setupCloudflare(serviceSlug, false);
     
     // Update wrangler configurations
     await updateWranglerConfig(projectPath, { workerName: cloudflareResult.workerName });
@@ -78,15 +78,15 @@ export async function connectDeploy(projectPath: string): Promise<void> {
     console.log(chalk.cyan('\n📋 Next steps:'));
     console.log(`   1. Deploy both: pnpm run deploy (from root)`);
     console.log('   2. Or deploy individually:');
-    console.log('      - API:  cd server && pnpm run deploy');
-    console.log('      - UI:   cd ui && pnpm run deploy');
+    console.log('      - API:  pnpm --filter server run deploy');
+    console.log('      - UI:   pnpm --filter ui run deploy');
     console.log('   3. Update your frontend environment variables with production values');
     console.log('   4. Test your production deployment thoroughly');
     
     console.log(chalk.blue('\n🔧 Useful commands:'));
     console.log('   - Deploy all:     pnpm run deploy');
-    console.log('   - Deploy API:     cd server && pnpm run deploy');
-    console.log('   - Deploy UI:      cd ui && pnpm run deploy');
+    console.log('   - Deploy API:     pnpm --filter server run deploy');
+    console.log('   - Deploy UI:      pnpm --filter ui run deploy');
     console.log('   - View API logs:  cd server && npx wrangler tail');
     console.log('   - Update secrets: cd server && npx wrangler secret put VARIABLE_NAME');
     
@@ -208,7 +208,7 @@ async function updatePackageJsonForCloudflare(projectPath: string) {
     const packageJson = JSON.parse(await readFile(rootPackageJsonPath, 'utf-8'));
     
     if (packageJson.scripts) {
-      packageJson.scripts['deploy'] = 'cd server && pnpm run deploy && cd ../ui && pnpm run deploy';
+      packageJson.scripts['deploy'] = 'pnpm --filter server run deploy && pnpm --filter ui run deploy';
       packageJson.scripts['dev:node'] = packageJson.scripts.dev
         ? packageJson.scripts.dev.replace('cd server && pnpm dev', 'cd server && pnpm dev:node')
         : 'cd server && pnpm dev:node';
@@ -295,7 +295,7 @@ function showDeploymentInstructions() {
   console.log('Both your API and frontend deploy as Cloudflare Workers.\n');
   
   console.log(chalk.blue('📋 Deploy commands:'));
-  console.log('  Deploy API:   cd server && pnpm run deploy');
-  console.log('  Deploy UI:    cd ui && pnpm run deploy');
+  console.log('  Deploy API:   pnpm --filter server run deploy');
+  console.log('  Deploy UI:    pnpm --filter ui run deploy');
   console.log('  Deploy both:  pnpm run deploy (from root)\n');
-} 
+}

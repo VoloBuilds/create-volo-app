@@ -25,6 +25,7 @@ Run every command from the **create-volo-app repository root**. Do **not** prefi
 |------|---------|
 | `.tmp/volo-flow-test` | Scaffolded test project |
 | `.tmp/volo-flow-test.state.json` | Run metadata (includes dev pid and frontend URL after `dev`) |
+| `.tmp/volo-flow-test.dev.log` | Captured stdout/stderr from `test:volo-flow:dev` (for debugging API/service failures) |
 
 Template default: `../volo-app` (override with `VOLO_APP_TEMPLATE`).
 
@@ -57,7 +58,9 @@ pnpm test:volo-flow -- --force
 pnpm test:volo-flow:dev
 ```
 
-Starts the scaffolded app in the background with `VOLO_DEV_IGNORE_STDIN=1`, waits for `Your app is ready at:`, writes the frontend URL and dev pid to state, then **exits** while services keep running.
+Starts the scaffolded app in the background with `VOLO_DEV_IGNORE_STDIN=1`, waits for `VOLO_DEV_FRONTEND_URL=…` and `VOLO_DEV_BACKEND_URL=…` from `scripts/run-dev.js`, verifies backend `GET /` health, captures all service output to `.tmp/volo-flow-test.dev.log`, writes URLs and dev pid to state, then **exits** while services keep running.
+
+On failure (timeout, process exit, or backend health check), prints a filtered excerpt from the dev log before exiting non-zero.
 
 ## 3. Browser verification (AI)
 
@@ -91,3 +94,20 @@ These files must exist in the template. Do not remove or rename them without upd
 - `server/package.json` (must include `dev`, `deploy`, `deploy:cf` scripts)
 
 Local template copy excludes: `node_modules/`, `.git/`, `dist/`, `.next/`, `data/`.
+
+## Dev readiness log contract
+
+`pnpm test:volo-flow:dev` parses stdout from the scaffolded app’s `pnpm run dev` → volo-app `scripts/run-dev.js`.
+
+Required machine-readable lines (do not rename without updating `scripts/test-volo-flow.mjs`):
+
+```text
+VOLO_DEV_FRONTEND_URL=http://localhost:5173
+VOLO_DEV_BACKEND_URL=http://localhost:8787
+```
+
+After both URLs appear, the runner polls `GET {backendUrl}/` until `{ "status": "ok" }` or times out (30s).
+
+All dev stdout/stderr during startup is appended to `.tmp/volo-flow-test.dev.log`. On startup/health failure, the runner prints a filtered excerpt (lines tagged `[server]`, `[database]`, errors, etc.) plus the full log path. After `dev-ready`, the runner **exits** (dev server keeps running in the background); the log file retains startup output only.
+
+Legacy fallbacks: human `Frontend:` / `Backend:` lines for older templates.

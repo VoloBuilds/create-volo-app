@@ -68,23 +68,39 @@
         },
         "projectName": {
           "type": "string",
-          "description": "Name for the database project (used when creating)"
+          "description": "Database project name or ID (required when action is 'existing' for neon/supabase; used as name when creating)"
         },
         "connectionString": {
           "type": "string",
           "description": "PostgreSQL connection string (required when action is 'existing' and provider is 'other')"
         }
       },
-      "if": {
-        "properties": {
-          "action": { "const": "existing" },
-          "provider": { "const": "other" }
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": { "const": "existing" },
+              "provider": { "const": "other" }
+            },
+            "required": ["action", "provider"]
+          },
+          "then": {
+            "required": ["provider", "action", "connectionString"]
+          }
         },
-        "required": ["action", "provider"]
-      },
-      "then": {
-        "required": ["provider", "action", "connectionString"]
-      }
+        {
+          "if": {
+            "properties": {
+              "action": { "const": "existing" },
+              "provider": { "enum": ["neon", "supabase"] }
+            },
+            "required": ["action", "provider"]
+          },
+          "then": {
+            "required": ["provider", "action", "projectName"]
+          }
+        }
+      ]
     },
     "deploy": {
       "type": "object",
@@ -121,6 +137,11 @@
         "template": {
           "type": "string",
           "description": "Custom template (GitHub URL or local path; append #branch for branch)"
+        },
+        "overwrite": {
+          "type": "boolean",
+          "description": "Allow replacing an existing project directory when using --config. Defaults to false.",
+          "default": false
         }
       }
     }

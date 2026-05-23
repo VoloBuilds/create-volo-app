@@ -20,8 +20,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = path.resolve(__dirname, '..');
 const TEST_DIR = path.join(CLI_ROOT, '.tmp/volo-flow-test');
 const STATE_FILE = path.join(CLI_ROOT, '.tmp/volo-flow-test.state.json');
+const DEV_LOG_FILE = path.join(CLI_ROOT, '.tmp/volo-flow-test.dev.log');
 const CONFIG_FILE = path.join(CLI_ROOT, 'examples/volo-config.local.json');
 const DEV_READY_TIMEOUT_MS = 120_000;
+const DEV_BACKEND_HEALTH_TIMEOUT_MS = 30_000;
+const DEV_BACKEND_HEALTH_INTERVAL_MS = 500;
 const DEV_STOP_TIMEOUT_MS = 30_000;
 
 const command = process.argv[2] ?? 'run';
@@ -115,10 +118,98 @@ function isProcessRunning(pid) {
   }
 }
 
+/**
+ * Dev readiness log contract (volo-app `scripts/run-dev.js`):
+ *   VOLO_DEV_FRONTEND_URL=http://localhost:PORT
+ *   VOLO_DEV_BACKEND_URL=http://localhost:PORT
+ * Parsed by `pnpm test:volo-flow:dev`. Do not rename without updating this script.
+ * Falls back to legacy human `Frontend:` / `Backend:` lines for older templates.
+ */
 function parseFrontendUrl(output) {
   const plain = stripAnsi(output);
-  const match = plain.match(/Frontend:\s+(https?:\/\/\S+)/i);
-  return match?.[1]?.trim() ?? null;
+  const machineMatch = plain.match(/^VOLO_DEV_FRONTEND_URL=(https?:\/\/\S+)/m);
+  if (machineMatch?.[1]) {
+    return machineMatch[1].trim();
+  }
+  const legacyMatch = plain.match(/Frontend:\s+(https?:\/\/\S+)/i);
+  return legacyMatch?.[1]?.trim() ?? null;
+}
+
+function parseBackendUrl(output) {
+  const plain = stripAnsi(output);
+  const machineMatch = plain.match(/^VOLO_DEV_BACKEND_URL=(https?:\/\/\S+)/m);
+  if (machineMatch?.[1]) {
+    return machineMatch[1].trim();
+  }
+  const legacyMatch = plain.match(/Backend:\s+(https?:\/\/\S+)/i);
+  return legacyMatch?.[1]?.trim() ?? null;
+}
+
+function initDevLogFile() {
+  fs.mkdirSync(path.dirname(DEV_LOG_FILE), { recursive: true });
+  fs.writeFileSync(DEV_LOG_FILE, '');
+  return (chunk) => {
+    fs.appendFileSync(DEV_LOG_FILE, chunk);
+  };
+}
+
+function getDevLogExcerpt({ maxLines = 120, errorsOnly = false } = {}) {
+  if (!fs.existsSync(DEV_LOG_FILE)) {
+    return '(no dev log captured)';
+  }
+
+  const lines = stripAnsi(fs.readFileSync(DEV_LOG_FILE, 'utf8')).split('\n');
+  const filtered = errorsOnly
+    ? lines.filter((line) =>
+        /\[(server|database|frontend|firebase|backup)\]|❌|(^|\s)Error:|Failed|EADDRINUSE|ECONNREFUSED|Cannot find module|SyntaxError|TypeError|ReferenceError|Unhandled|exit code/i.test(line)
+      )
+    : lines;
+
+  const selected = (filtered.length > 0 ? filtered : lines).filter(Boolean);
+  if (selected.length === 0) {
+    return '(dev log is empty)';
+  }
+
+  return selected.slice(-maxLines).join('\n');
+}
+
+function printDevLogExcerpt({ heading = 'Dev server log excerpt', errorsOnly = true } = {}) {
+  const excerpt = getDevLogExcerpt({ errorsOnly });
+  console.error('');
+  console.error(`${heading} (${DEV_LOG_FILE}):`);
+  console.error('─'.repeat(72));
+  console.error(excerpt);
+  console.error('─'.repeat(72));
+  if (errorsOnly) {
+    console.error(`Full log: ${DEV_LOG_FILE}`);
+  }
+}
+
+async function verifyBackendHealth(backendUrl) {
+  const normalized = backendUrl.replace(/\/$/, '');
+  const deadline = Date.now() + DEV_BACKEND_HEALTH_TIMEOUT_MS;
+  let lastError = 'no response';
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${normalized}/`);
+      if (response.ok) {
+        const body = await response.json().catch(() => null);
+        if (body?.status === 'ok') {
+          return;
+        }
+        lastError = `unexpected body: ${JSON.stringify(body)}`;
+      } else {
+        lastError = `HTTP ${response.status}`;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+
+    await sleep(DEV_BACKEND_HEALTH_INTERVAL_MS);
+  }
+
+  throw new Error(`Backend health check failed for ${normalized}: ${lastError}`);
 }
 
 function releaseDevChild(child) {
@@ -126,6 +217,7 @@ function releaseDevChild(child) {
   child.stderr?.removeAllListeners();
   child.removeAllListeners('exit');
   child.removeAllListeners('error');
+  // Close the parent's read end so test-volo-flow:dev can exit while run-dev.js keeps running.
   child.stdout?.destroy();
   child.stderr?.destroy();
   child.unref();
@@ -235,8 +327,10 @@ function printPlan({ templatePath, mode }) {
   if (mode === 'dev') {
     console.log('Dev will:');
     console.log('  1. Start the scaffolded app dev server in the background');
-    console.log('  2. Wait for "Your app is ready at:"');
-    console.log('  3. Record pid and frontend URL in the state file');
+    console.log('  2. Wait for VOLO_DEV_FRONTEND_URL / VOLO_DEV_BACKEND_URL (or legacy lines)');
+    console.log('  3. Verify backend GET / health check');
+    console.log(`  4. Capture service logs to ${DEV_LOG_FILE}`);
+    console.log('  5. Record pid and URLs in the state file');
     console.log('');
   }
 
@@ -251,6 +345,7 @@ function printPlan({ templatePath, mode }) {
     console.log('  2. Delete ONLY:');
     console.log(`     - ${TEST_DIR}`);
     console.log(`     - ${STATE_FILE}`);
+    console.log(`     - ${DEV_LOG_FILE}`);
     console.log('');
   }
 }
@@ -475,8 +570,8 @@ async function runDev() {
     mode: 'dev',
   });
 
+  const appendDevLog = initDevLogFile();
   let output = '';
-  let settled = false;
 
   const child = spawn('node', ['scripts/run-dev.js'], {
     cwd: TEST_DIR,
@@ -488,74 +583,99 @@ async function runDev() {
     },
   });
 
-  let readyTimeoutId;
-
-  const readyPromise = new Promise((resolve, reject) => {
-    const settle = (fn, value) => {
-      if (settled) {
-        return;
+  const failDevStartup = async (error) => {
+    releaseDevChild(child);
+    if (child.pid && isProcessRunning(child.pid)) {
+      try {
+        signalDevProcess(child.pid, 'SIGINT');
+        await sleep(2000);
+      } catch {
+        // Best effort cleanup for a failed startup.
       }
-      settled = true;
-      clearTimeout(readyTimeoutId);
-      fn(value);
-    };
-
-    const handleOutput = (chunk) => {
-      output += chunk.toString();
-      const frontendUrl = parseFrontendUrl(output);
-      if (frontendUrl) {
-        settle(resolve, frontendUrl);
-      }
-    };
-
-    child.stdout.on('data', (chunk) => {
-      process.stdout.write(chunk);
-      handleOutput(chunk);
-    });
-
-    child.stderr.on('data', (chunk) => {
-      process.stderr.write(chunk);
-      handleOutput(chunk);
-    });
-
-    child.on('error', (error) => {
-      settle(reject, new Error(error.message));
-    });
-
-    child.on('exit', (code, signal) => {
-      if (settled) {
-        return;
-      }
-
-      if (code === 0 || signal) {
-        return;
-      }
-
-      settle(
-        reject,
-        new Error(extractFailureMessage(output) || `Dev server exited with code ${code}`),
-      );
-    });
-
-    readyTimeoutId = setTimeout(() => {
-      settle(reject, new Error(`Timed out waiting for dev server (${DEV_READY_TIMEOUT_MS / 1000}s)`));
-    }, DEV_READY_TIMEOUT_MS);
-  });
+    }
+    printDevLogExcerpt({ heading: error.message });
+    throw error;
+  };
 
   try {
-    const frontendUrl = await readyPromise;
+    const { frontendUrl, backendUrl } = await new Promise((resolve, reject) => {
+      let finished = false;
+      let timeoutId;
+
+      const finish = (fn, value) => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        clearTimeout(timeoutId);
+        fn(value);
+      };
+
+      const handleOutput = (chunk, stream) => {
+        appendDevLog(chunk);
+        if (stream === 'stdout') {
+          process.stdout.write(chunk);
+        } else {
+          process.stderr.write(chunk);
+        }
+        output += chunk.toString();
+
+        const parsedFrontend = parseFrontendUrl(output);
+        const parsedBackend = parseBackendUrl(output);
+        if (parsedFrontend && parsedBackend) {
+          finish(resolve, {
+            frontendUrl: parsedFrontend,
+            backendUrl: parsedBackend,
+          });
+        }
+      };
+
+      child.stdout.on('data', (chunk) => handleOutput(chunk, 'stdout'));
+      child.stderr.on('data', (chunk) => handleOutput(chunk, 'stderr'));
+
+      child.on('error', (error) => {
+        finish(reject, new Error(error.message));
+      });
+
+      child.on('exit', (code, signal) => {
+        if (finished) {
+          return;
+        }
+        if (code === 0 || signal) {
+          return;
+        }
+        finish(
+          reject,
+          new Error(extractFailureMessage(output) || `Dev server exited with code ${code}`),
+        );
+      });
+
+      timeoutId = setTimeout(() => {
+        finish(reject, new Error(`Timed out waiting for dev server (${DEV_READY_TIMEOUT_MS / 1000}s)`));
+      }, DEV_READY_TIMEOUT_MS);
+    });
+
+    console.log('');
+    console.log(`Verifying backend health at ${backendUrl} ...`);
+    await verifyBackendHealth(backendUrl);
+    console.log('Backend health check OK');
+
     releaseDevChild(child);
 
     const nextState = writeState({
       devPid: child.pid,
       frontendUrl,
+      backendUrl,
+      devLogFile: DEV_LOG_FILE,
       devStartedAt: new Date().toISOString(),
     });
 
     console.log('');
     console.log(`Dev server running (pid ${child.pid})`);
     console.log(`Frontend: ${frontendUrl}`);
-    console.log(`State: ${STATE_FILE}`);
+    console.log(`Backend:  ${backendUrl}`);
+    console.log(`Dev log:  ${DEV_LOG_FILE}`);
+    console.log(`State:    ${STATE_FILE}`);
     console.log('');
     console.log('Next: browser-test the frontend URL, then run pnpm test:volo-flow:stop');
     console.log('');
@@ -563,18 +683,12 @@ async function runDev() {
       status: 'dev-ready',
       devPid: nextState.devPid,
       frontendUrl: nextState.frontendUrl,
+      backendUrl: nextState.backendUrl,
+      devLogFile: nextState.devLogFile,
       testDir: TEST_DIR,
     }, null, 2));
   } catch (error) {
-    releaseDevChild(child);
-    if (child.pid && isProcessRunning(child.pid)) {
-      try {
-        process.kill(child.pid, 'SIGINT');
-      } catch {
-        // Best effort cleanup for a failed startup.
-      }
-    }
-    throw error;
+    await failDevStartup(error instanceof Error ? error : new Error(String(error)));
   }
 }
 
@@ -682,6 +796,12 @@ async function runCleanup() {
   if (fs.existsSync(STATE_FILE)) {
     fs.rmSync(STATE_FILE, { force: true });
     console.log(`Removed ${STATE_FILE}`);
+    removed += 1;
+  }
+
+  if (fs.existsSync(DEV_LOG_FILE)) {
+    fs.rmSync(DEV_LOG_FILE, { force: true });
+    console.log(`Removed ${DEV_LOG_FILE}`);
     removed += 1;
   }
 

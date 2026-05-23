@@ -2,7 +2,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
 import { logger } from '../utils/logger.js';
-import { validateWorkerName } from '../utils/validation.js';
+import { validateWorkerName, sanitizeWorkerName } from '../utils/validation.js';
 import { execWrangler } from '../utils/cli.js';
 import type { VoloConfig } from '../utils/config.js';
 
@@ -19,7 +19,7 @@ async function checkWranglerAuth(): Promise<boolean> {
   }
 }
 
-export async function setupCloudflare(projectName: string, fastMode = false, configData?: VoloConfig): Promise<CloudflareConfig> {
+export async function setupCloudflare(serviceSlug: string, fastMode = false, configData?: VoloConfig): Promise<CloudflareConfig> {
   const deployConfig = configData?.deploy;
 
   logger.newLine();
@@ -40,12 +40,18 @@ export async function setupCloudflare(projectName: string, fastMode = false, con
     logger.success('Already authenticated with Cloudflare ✓');
   }
 
-  const defaultWorkerName = `${projectName}-api`;
+  const defaultWorkerName = sanitizeWorkerName(`${serviceSlug}-api`);
 
   let workerName: string;
 
   if (deployConfig?.workerName) {
     workerName = deployConfig.workerName;
+    if (!validateWorkerName(workerName)) {
+      throw new Error(
+        `deploy.workerName "${workerName}" in config is invalid for Cloudflare Workers. ` +
+        'Worker names must be lowercase, contain only letters, numbers, and hyphens, and not start/end with a hyphen.'
+      );
+    }
     logger.info(`Using worker name from config: ${workerName}`);
   } else if (fastMode || deployConfig) {
     workerName = defaultWorkerName;

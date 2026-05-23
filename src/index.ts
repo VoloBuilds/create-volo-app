@@ -8,7 +8,8 @@ import { checkPrerequisites } from './utils/prerequisites/checkPrereqs.js';
 import { logger } from './utils/logger.js';
 import { connectToService } from './commands/connect/index.js';
 import { showConnectionStatus } from './commands/connect/status.js';
-import { loadConfig, discoverConfig, mergeConfigWithOptions, generateConfigInteractively } from './utils/config.js';
+import { loadConfig, mergeConfigWithOptions, generateConfigInteractively } from './utils/config.js';
+import { assertNoDeprecatedCliFlags } from './utils/deprecatedFlags.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };
@@ -16,10 +17,13 @@ const { version } = require('../package.json') as { version: string };
 const program = new Command();
 
 // Default template (branch is embedded as #fragment; parseTemplateArg() splits it).
-const DEFAULT_TEMPLATE = 'https://github.com/VoloBuilds/volo-app.git#release/v0.3.1';
+const DEFAULT_TEMPLATE = 'https://github.com/VoloBuilds/volo-app.git#release/v0.4.0';
 
 export async function main() {
-  program
+  try {
+    assertNoDeprecatedCliFlags();
+
+    program
     .name('create-volo-app')
     .description('CLI tool to create a new Volo app with flexible local-first or production setup')
     .version(version)
@@ -94,17 +98,11 @@ Examples:
           return;
         }
 
-        // Load config file if provided or auto-discovered
+        // Load config file when --config is provided
         let configData;
         if (options.config) {
           configData = loadConfig(options.config);
           logger.info(`Using config: ${options.config}`);
-        } else {
-          const discoveredPath = discoverConfig();
-          if (discoveredPath) {
-            configData = loadConfig(discoveredPath);
-            logger.info('Using config: ./volo-config.json');
-          }
         }
 
         if (configData) {
@@ -144,7 +142,11 @@ Examples:
       }
     });
 
-  await program.parseAsync();
+    await program.parseAsync();
+  } catch (error) {
+    console.error(chalk.red('❌ Error:'), error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

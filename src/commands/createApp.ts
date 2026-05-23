@@ -8,6 +8,7 @@ import { generateModularConfigFiles } from '../utils/modularConfig.js';
 import { execPnpm, execPnpmDetached } from '../utils/cli.js';
 import { CreateOptions, ProjectConfig } from './shared/types.js';
 import { getProjectName, validateAndPrepareDirectory } from './shared/project.js';
+import { sanitizeWorkerName } from '../utils/validation.js';
 import { askToStartDevelopmentServer } from './shared/prompts.js';
 import { checkAuthenticationStatus, handleBatchAuthentication } from './shared/authentication.js';
 import { setupFirebaseWithRetry, setupDatabaseWithRetry } from './shared/serviceSetup.js';
@@ -26,7 +27,7 @@ export async function createApp(
   const configData = options.configData;
 
   // Get project name and directory
-  const { name, directory: resolvedDir, isCurrentDirectory } = await getProjectName(projectName, configData);
+  const { name, serviceSlug, directory: resolvedDir, isCurrentDirectory } = await getProjectName(projectName, configData);
   const directory = await validateAndPrepareDirectory(resolvedDir, isCurrentDirectory, configData);
 
   // Determine setup type for messaging
@@ -129,12 +130,13 @@ export async function createApp(
   // Step 4: Setup services (mix of production and local)
   const config: ProjectConfig = {
     name,
+    serviceSlug,
     directory,
     database: connectionFlags.database 
-      ? await setupDatabaseWithRetry(getDatabaseProvider(options), undefined, options.fast, name, configData)
+      ? await setupDatabaseWithRetry(getDatabaseProvider(options), undefined, options.fast, serviceSlug, configData)
       : { url: 'postgresql://postgres:password@localhost:5433/postgres', provider: 'other' as const },
     firebase: connectionFlags.auth 
-      ? await setupFirebaseWithRetry(undefined, options.fast, name, configData)
+      ? await setupFirebaseWithRetry(undefined, options.fast, serviceSlug, name, configData)
       : { 
           projectId: 'demo-project', 
           apiKey: 'demo-api-key', 
@@ -144,8 +146,8 @@ export async function createApp(
           allowAnonymous: true
         },
     cloudflare: connectionFlags.deploy 
-      ? await setupCloudflare(name, options.fast || false, configData)
-      : { workerName: `${name}-local` }
+      ? await setupCloudflare(serviceSlug, options.fast || false, configData)
+      : { workerName: sanitizeWorkerName(`${serviceSlug}-local`) }
   };
 
   // Step 5: Generate modular configuration files

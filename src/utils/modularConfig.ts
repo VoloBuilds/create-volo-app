@@ -1,5 +1,6 @@
 import fs from 'fs-extra';
 import path from 'path';
+import { execPnpm } from './cli.js';
 import { logger } from './logger.js';
 import { ProjectConfig } from '../commands/shared/types.js';
 
@@ -176,6 +177,10 @@ export async function generateUICloudflareConfig(directory: string, workerName: 
       'wrangler': '^3.0.0',
     };
     await fs.writeFile(uiPackageJsonPath, JSON.stringify(packageJson, null, 2));
+
+    const uiDir = path.join(directory, 'ui');
+    await execPnpm(['install'], { cwd: uiDir, stdio: 'pipe' });
+    logger.debug('Installed ui dependencies (wrangler)');
   }
 }
 

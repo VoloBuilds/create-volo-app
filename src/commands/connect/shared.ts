@@ -1,6 +1,7 @@
 import { readFile } from 'fs/promises';
 import path from 'path';
 import readline from 'readline';
+import { deriveServiceSlug } from '../../utils/validation.js';
 
 /**
  * Create a shared readline interface for user prompts
@@ -27,6 +28,15 @@ export function question(rl: readline.Interface, prompt: string): Promise<string
 export async function getProjectNameFromPackageJson(projectPath: string): Promise<string> {
   const packageJson = JSON.parse(await readFile(path.join(projectPath, 'package.json'), 'utf-8'));
   return packageJson.name || 'volo-app';
+}
+
+/**
+ * Read package.json name and derive both display name and cloud service slug.
+ * Use `serviceSlug` for cloud resource defaults; `name` for display messages.
+ */
+export async function getProjectNameAndSlugFromPackageJson(projectPath: string): Promise<{ name: string; serviceSlug: string }> {
+  const name = await getProjectNameFromPackageJson(projectPath);
+  return { name, serviceSlug: deriveServiceSlug(name) };
 }
 
 /**
