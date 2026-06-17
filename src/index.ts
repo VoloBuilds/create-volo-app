@@ -9,7 +9,7 @@ import { checkPrerequisites } from './utils/prerequisites/checkPrereqs.js';
 import { logger } from './utils/logger.js';
 import { connectToService } from './commands/connect/index.js';
 import { showConnectionStatus } from './commands/connect/status.js';
-import { loadConfig, mergeConfigWithOptions, generateConfigInteractively, validateConfigForNonInteractive } from './utils/config.js';
+import { loadConfig, mergeConfigWithOptions, generateConfigInteractively, validateConfigForNonInteractive, printConfigHelp } from './utils/config.js';
 import { assertNoDeprecatedCliFlags } from './utils/deprecatedFlags.js';
 
 const require = createRequire(import.meta.url);
@@ -39,6 +39,7 @@ export async function main() {
     .option('--deploy [provider]', 'Production deployment setup (default: cloudflare)')
     .option('--config [path]', 'Use volo-config.json for non-interactive setup (defaults to ./volo-config.json in cwd)')
     .option('--init-config', 'Generate a volo-config.json via interactive wizard')
+    .option('--help-config', 'Print volo-config.json schema and config-mode reference, then exit')
     .addHelpText('after', `
 Examples:
   # Local development (default)
@@ -66,6 +67,9 @@ Examples:
   # Generate a config file
   npx create-volo-app --init-config
 
+  # Config schema and non-interactive reference (for agents/CI)
+  npx create-volo-app --help-config
+
   # Connect a service to existing project (run from project dir)
   npx create-volo-app --connect --auth
 
@@ -75,6 +79,12 @@ Examples:
     .action(async (projectName: string | undefined, options, command) => {
       try {
         logger.setVerbose(options.verbose);
+
+        // Handle --help-config: print schema reference and exit
+        if (options.helpConfig) {
+          printConfigHelp();
+          return;
+        }
 
         // Handle --init-config: generate config file and exit
         if (options.initConfig) {

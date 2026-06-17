@@ -119,6 +119,9 @@ npx create-volo-app my-app --config ./volo-config.json
 
 # Generate a config file interactively
 npx create-volo-app --init-config
+
+# Print schema + config-mode reference (for agents/CI)
+npx create-volo-app --help-config
 ```
 
 ## Upgrading from older CLI flags
@@ -139,7 +142,7 @@ These flags were removed; Commander no longer accepts them. If a script still pa
 
 ## Config file (`volo-config.json`)
 
-Use a config file for **non-interactive** or **CI** scaffolding. Pass it explicitly with `--config ./volo-config.json` (a file in the current directory is **not** loaded automatically).
+Use a config file for **non-interactive** or **CI** scaffolding. Pass it explicitly with `--config ./volo-config.json` (a file in the current directory is **not** loaded automatically). Run `npx create-volo-app --help-config` for the bundled JSON Schema, required fields, auth rules, and links to example configs — external tools can call this instead of duplicating CLI docs.
 
 **Do not commit your real config.** Treat `volo-config.json` like `.env`: it often holds database URLs and other secrets. Generated projects include `volo-config.json` in `.gitignore` by default. Safe, committed samples live under [`examples/`](examples/) — copy and edit those locally, or run `--init-config` to generate a new file.
 

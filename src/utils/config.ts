@@ -17,6 +17,111 @@ export function getPublishedConfigSchemaUrl(version: string = packageVersion): s
   return `https://raw.githubusercontent.com/VoloBuilds/create-volo-app/v${version}/volo-config.schema.json`;
 }
 
+export function getPublishedExampleConfigUrl(
+  filename: string,
+  version: string = packageVersion
+): string {
+  return `https://raw.githubusercontent.com/VoloBuilds/create-volo-app/v${version}/examples/${filename}`;
+}
+
+function getBundledConfigSchemaPath(): string {
+  return path.resolve(__dirname, '..', '..', 'volo-config.schema.json');
+}
+
+function loadBundledConfigSchema(): Record<string, unknown> {
+  const schemaPath = getBundledConfigSchemaPath();
+  if (!fs.existsSync(schemaPath)) {
+    throw new Error(`Bundled config schema not found at ${schemaPath}`);
+  }
+  return JSON.parse(fs.readFileSync(schemaPath, 'utf-8')) as Record<string, unknown>;
+}
+
+export function printConfigHelp(): void {
+  const schemaUrl = getPublishedConfigSchemaUrl();
+  const examples = [
+    'volo-config.local.json',
+    'volo-config.production.json',
+    'volo-config.new-project.json',
+  ] as const;
+
+  const lines = [
+    `create-volo-app config reference (v${packageVersion})`,
+    '',
+    'CONFIG MODE',
+    '---------',
+    'npx create-volo-app --config ./volo-config.json',
+    'npx create-volo-app my-app --config ./volo-config.json',
+    '',
+    'Pass --config explicitly (bare flag defaults to ./volo-config.json in cwd).',
+    'Generate a starter file interactively: npx create-volo-app --init-config',
+    '',
+    'REQUIRED FIELDS (non-interactive)',
+    '---------------------------------',
+    '- projectName: target directory name (used when the CLI positional is omitted)',
+    '- database.action ("create" | "existing"): required when a database block is present',
+    '',
+    'SCHEMA-ENFORCED CONDITIONALS',
+    '-----------------------------',
+    '- auth.projectId: required when auth.action is "existing"',
+    '- database.projectName: required when database.action is "existing" and provider is neon or supabase',
+    '- database.connectionString: required when database.action is "existing" and provider is "other"',
+    '',
+    'SERVICE BLOCKS (CLI EQUIVALENTS)',
+    '--------------------------------',
+    '- auth: implies --auth (Firebase Authentication)',
+    '- database: implies --database <provider> (neon | supabase | other)',
+    '- deploy: implies --deploy cloudflare (provider defaults to "cloudflare")',
+    '',
+    'options.skipPrereqs — skip prerequisite checks',
+    'options.verbose — enable verbose logging',
+    'options.template — template URL or local path (#branch for branch); CLI --template wins if passed',
+    'options.overwrite — allow replacing an existing target directory (default: false)',
+    '',
+    'NON-INTERACTIVE AUTH RULES',
+    '--------------------------',
+    'Config mode never opens browser auth prompts. Pre-authenticate required CLIs before running,',
+    'or supply credentials in the config:',
+    '  - Firebase (auth): firebase login — or auth.projectId for an existing project',
+    '  - Neon (database.provider neon): neonctl auth — or database.connectionString',
+    '  - Supabase (database.provider supabase): supabase login — or database.connectionString',
+    '  - Cloudflare (deploy): wrangler login',
+    '',
+    'If authentication is still needed when --config runs, the CLI fails immediately.',
+    'Service setup does not retry in config mode. Manual Neon/Supabase fallbacks are disabled;',
+    'use connectionString or an authenticated CLI.',
+    '',
+    'EXAMPLE CONFIGS',
+    '---------------',
+    ...examples.flatMap((name) => [
+      `https://github.com/VoloBuilds/create-volo-app/blob/v${packageVersion}/examples/${name}`,
+      getPublishedExampleConfigUrl(name),
+    ]),
+    '',
+    'SCHEMA URL (for $schema in volo-config.json)',
+    '--------------------------------------------',
+    schemaUrl,
+    '',
+    'MINIMAL LOCAL EXAMPLE',
+    '---------------------',
+    JSON.stringify(
+      {
+        $schema: schemaUrl,
+        projectName: 'my-app',
+        options: { skipPrereqs: true, template: '/path/to/volo-app' },
+      },
+      null,
+      2
+    ),
+    '',
+    '--- volo-config.schema.json ---',
+    JSON.stringify(loadBundledConfigSchema(), null, 2),
+    '--- end volo-config.schema.json ---',
+    '',
+  ];
+
+  console.log(lines.join('\n'));
+}
+
 export interface VoloConfig {
   $schema?: string;
   projectName?: string;
@@ -55,8 +160,7 @@ let cachedValidate: ReturnType<Ajv['compile']> | null = null;
 function getSchemaValidator(): ReturnType<Ajv['compile']> | null {
   if (cachedValidate !== null) return cachedValidate;
 
-  // Resolve schema relative to the package root (two levels up from dist/utils/)
-  const schemaPath = path.resolve(__dirname, '..', '..', 'volo-config.schema.json');
+  const schemaPath = getBundledConfigSchemaPath();
   if (!fs.existsSync(schemaPath)) {
     logger.debug(`Schema file not found at ${schemaPath}, skipping schema validation`);
     return null;
